@@ -105,8 +105,8 @@ class TestWire(unittest.TestCase):
         red = Wire(WireColor.RED, 7.5)
         # Just verify they produce non-empty strings without errors
         self.assertIn("5", str(blue))
-        self.assertIn("Y", str(yellow))
-        self.assertIn("R", str(red))
+        self.assertIn("3", str(yellow))
+        self.assertIn("7", str(red))
 
 
 class TestWireFactories(unittest.TestCase):
@@ -268,8 +268,15 @@ class TestTileStand(unittest.TestCase):
         wires = [Wire(WireColor.BLUE, 1.0), Wire(WireColor.BLUE, 5.0)]
         stand = TileStand.from_wires(wires)
         output = str(stand)
-        self.assertIn("0:", output)
-        self.assertIn("1:", output)
+        self.assertIn("A", output)
+        self.assertIn("B", output)
+
+    def test_stand_lines(self) -> None:
+        wires = [Wire(WireColor.BLUE, 1.0), Wire(WireColor.BLUE, 5.0)]
+        stand = TileStand.from_wires(wires)
+        _, _, letters = stand.stand_lines()
+        self.assertIn("A", letters)
+        self.assertIn("B", letters)
 
 
 class TestSortValueBounds(unittest.TestCase):
@@ -388,7 +395,7 @@ class TestDetonator(unittest.TestCase):
         d = Detonator(max_failures=4)
         d.advance()
         output = str(d)
-        self.assertIn("1/4", output)
+        self.assertIn("Mistakes remaining: 3", output)
 
 
 class TestInfoTokenPool(unittest.TestCase):
@@ -682,7 +689,7 @@ class TestGameStateCreation(unittest.TestCase):
         output = str(game)
         self.assertIn("Bomb Busters", output)
         self.assertIn("Alice", output)
-        self.assertIn("Detonator", output)
+        self.assertIn("Mistakes remaining", output)
 
 
 class TestGameStatePartialState(unittest.TestCase):

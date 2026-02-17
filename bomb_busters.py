@@ -138,12 +138,7 @@ class Wire:
 
     def __str__(self) -> str:
         color = self.color.ansi()
-        if self.color == WireColor.BLUE:
-            label = str(self.base_number)
-        elif self.color == WireColor.YELLOW:
-            label = "Y"
-        else:
-            label = "R"
+        label = str(self.base_number)
         return f"{color}{label}{_Colors.RESET}"
 
     def __repr__(self) -> str:
@@ -218,21 +213,44 @@ class Slot:
         """Whether this wire has an info token placed on it."""
         return self.state == SlotState.INFO_REVEALED
 
-    def __str__(self) -> str:
+    def value_label(self, mask_hidden: bool = False) -> tuple[str, str]:
+        """Return the display label and ANSI color for this slot's value.
+
+        Args:
+            mask_hidden: If True, hidden wires with known identity are
+                displayed as '?' (used for observer perspective mode).
+
+        Returns:
+            A tuple of (plain_text_label, ansi_colored_label).
+            The plain label is used for width calculations; the colored
+            label is used for display.
+        """
         if self.state == SlotState.HIDDEN:
-            if self.wire is not None:
-                # Simulation mode: show the actual wire dimmed
-                return f"{_Colors.DIM}[{self.wire}]{_Colors.RESET}"
-            return f"{_Colors.DIM}[?]{_Colors.RESET}"
+            if self.wire is not None and not mask_hidden:
+                plain = str(self.wire.base_number)
+                colored = f"{_Colors.DIM}{self.wire}{_Colors.RESET}"
+                return plain, colored
+            return "?", f"{_Colors.DIM}?{_Colors.RESET}"
         elif self.state == SlotState.CUT:
             if self.wire is not None:
-                return f"{_Colors.GREEN}✓{self.wire}{_Colors.RESET}"
-            return f"{_Colors.GREEN}✓?{_Colors.RESET}"
+                plain = str(self.wire.base_number)
+                colored = f"{_Colors.GREEN}{self.wire}{_Colors.RESET}"
+                return plain, colored
+            return "?", f"{_Colors.GREEN}?{_Colors.RESET}"
         else:  # INFO_REVEALED
-            token_str = str(self.info_token) if self.info_token is not None else "?"
+            if self.info_token is not None:
+                token_str = str(self.info_token)
+            else:
+                token_str = "?"
             if self.wire is not None:
-                return f"{_Colors.BOLD}i:{token_str}{_Colors.RESET}"
-            return f"{_Colors.BOLD}i:{token_str}{_Colors.RESET}"
+                colored = f"{_Colors.BOLD}{self.wire.color.ansi()}{token_str}{_Colors.RESET}"
+            else:
+                colored = f"{_Colors.BOLD}{token_str}{_Colors.RESET}"
+            return token_str, colored
+
+    def __str__(self) -> str:
+        _, colored = self.value_label()
+        return colored
 
 
 # =============================================================================
@@ -346,11 +364,52 @@ class TileStand:
         self.slots[index].state = SlotState.INFO_REVEALED
         self.slots[index].info_token = value
 
-    def __str__(self) -> str:
-        parts = []
+    def stand_lines(self, mask_hidden: bool = False) -> tuple[str, str, str]:
+        """Return the three display lines for this stand: status, values, letters.
+
+        The status line uses symbols above each value to indicate state:
+        nothing for hidden, checkmark for cut, 'i' for info-revealed.
+        Each cell is 3 characters wide for consistent alignment.
+
+        Args:
+            mask_hidden: If True, hidden wires are shown as '?' even if
+                the wire identity is known (observer perspective mode).
+
+        Returns:
+            A tuple of (status_line, values_line, letters_line).
+        """
+        CELL = 3
+        status_parts: list[str] = []
+        value_parts: list[str] = []
+        letter_parts: list[str] = []
         for i, slot in enumerate(self.slots):
-            parts.append(f"{i}:{slot}")
-        return " ".join(parts)
+            letter = chr(ord('A') + i)
+            plain, colored = slot.value_label(mask_hidden=mask_hidden)
+            plain_width = len(plain)
+            pad = CELL - plain_width
+
+            # Status indicator above the value
+            if slot.state == SlotState.CUT:
+                indicator = f"{_Colors.GREEN}✓{_Colors.RESET}"
+                indicator_plain_width = 1
+            elif slot.state == SlotState.INFO_REVEALED:
+                indicator = f"{_Colors.BOLD}i{_Colors.RESET}"
+                indicator_plain_width = 1
+            else:
+                indicator = " "
+                indicator_plain_width = 1
+            status_parts.append(" " * (CELL - indicator_plain_width) + indicator)
+
+            value_parts.append(" " * pad + colored)
+            letter_parts.append(" " * (CELL - 1) + letter)
+        status_line = "".join(status_parts)
+        values_line = "".join(value_parts)
+        letters_line = "".join(letter_parts)
+        return status_line, values_line, letters_line
+
+    def __str__(self) -> str:
+        _, values_line, letters_line = self.stand_lines()
+        return f"{values_line}\n{letters_line}"
 
 
 # =============================================================================
@@ -472,8 +531,8 @@ class Player:
         return self.tile_stand.is_empty
 
     def __str__(self) -> str:
-        card_str = f"  Card: {self.character_card}" if self.character_card else ""
-        return f"{_Colors.BOLD}{self.name}{_Colors.RESET}{card_str}\n  Stand: {self.tile_stand}"
+        card_str = f" | Card: {self.character_card}" if self.character_card else ""
+        return f"{_Colors.BOLD}{self.name}{_Colors.RESET}{card_str}"
 
 
 # =============================================================================
@@ -522,10 +581,9 @@ class Detonator:
         return max(0, self.max_failures - self.failures)
 
     def __str__(self) -> str:
-        filled = "✕" * self.failures
-        empty = "○" * self.remaining_failures
-        skull = "💀" if self.is_exploded else ""
-        return f"Detonator: [{filled}{empty}] {self.failures}/{self.max_failures} {skull}"
+        if self.is_exploded:
+            return f"Mistakes remaining: 💀 BOOM!"
+        return f"Mistakes remaining: {self.remaining_failures}"
 
 
 # =============================================================================
@@ -863,6 +921,9 @@ class GameState:
         game_over: Whether the game has ended.
         game_won: Whether the game was won (all stands empty).
         wires_in_play: All wire objects that were shuffled into the game.
+        observer_index: If set, display output is rendered from this
+            player's perspective (their wires visible, others' hidden
+            wires masked as '?'). If None, all wires are shown (god mode).
     """
     players: list[Player]
     detonator: Detonator
@@ -875,6 +936,7 @@ class GameState:
     game_over: bool = False
     game_won: bool = False
     wires_in_play: list[Wire] = field(default_factory=list)
+    observer_index: int | None = None
 
     # -----------------------------------------------------------------
     # Factory: Full Simulation Mode
@@ -1589,9 +1651,29 @@ class GameState:
         lines.append("")
 
         # Players
+        indent = "    "
+        highlight_index = (
+            self.observer_index if self.observer_index is not None
+            else self.current_player_index
+        )
         for i, player in enumerate(self.players):
-            turn_indicator = " ◄" if i == self.current_player_index else ""
-            lines.append(f"Player {i}{turn_indicator}: {player}")
+            if i == highlight_index:
+                lines.append(f"{_Colors.BOLD}>>> Player {i}: {player}{_Colors.RESET}")
+            else:
+                lines.append(f"{indent}Player {i}: {player}")
+            # Mask hidden wires for non-observer players
+            mask = (
+                self.observer_index is not None
+                and i != self.observer_index
+            )
+            status_line, values_line, letters_line = player.tile_stand.stand_lines(
+                mask_hidden=mask,
+            )
+            prefix = indent + "  "
+            lines.append(f"{prefix}{status_line}")
+            lines.append(f"{prefix}{values_line}")
+            lines.append(f"{prefix}{letters_line}")
+            lines.append("")
 
         lines.append("")
 

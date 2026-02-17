@@ -4,6 +4,10 @@ See @README.md for information about Bomb Busters and the rules of the game.
 
 See @Bomb Busters Rulebook.pdf for the official published PDF rulebook of the game. Refer to this for any unclear or ambiguous rules that the README does not cover. The @Bomb Busters FAQ.pdf file contains some additional clarifications. 
 
+## Conventions
+
+- Always assume a 5-player count in examples unless otherwise specified.
+
 ## Project Overview
 
 This Bomb Busters project builds a calculator for the game in Python to compute the probability of success of different cut actions. 

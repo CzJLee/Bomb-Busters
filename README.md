@@ -92,6 +92,94 @@ These are some useful tips / shortcuts that can be used in some of the calculati
 - If a player attempts and fails to cut a wire with a `dual cut` action, we know that they have at least one wire of that value.
 - You can narrow down the possibilities of wires in someone's `tile stand` by referencing which wires are fully cut. You know that those numbers can not exist on someones stand.
 
+## Terminal Display Guide
+
+The game state is printed to the terminal with ANSI color coding. Below is a breakdown of every element in the output.
+
+### Header
+
+```
+=== Bomb Busters ===
+Mistakes remaining: 3
+```
+
+**Mistakes remaining** shows how many more failed dual cuts the team can survive before the bomb explodes. Starts at N-1 for N players (e.g., 4 for a 5-player game). When it reaches 0, one more mistake ends the game.
+
+### Validated
+
+```
+Validated: 3, 7
+```
+
+Lists blue wire values (1-12) where all 4 copies have been cut. These numbers are fully cleared from the game. If none have been completed yet, it displays `(none)`.
+
+### Markers
+
+```
+Markers: 3(✓) 7(?)
+```
+
+Shown only when red or yellow wires are in play. Each marker indicates a colored wire value that was included in the mission:
+- `✓` — **Known**: this wire is definitely in the game.
+- `?` — **Uncertain**: this wire might be in the game ("X of Y" random selection mode).
+
+### Players
+
+Each player is displayed with a header line followed by their tile stand.
+
+#### Active player indicator
+
+```
+>>> Player 0: Alice | Card: Double Detector (available)
+```
+
+The active player (whose turn it is) is marked with a bold `>>>` prefix. All other players are indented with spaces.
+
+#### Character card status
+
+Shown after the player's name:
+- **(available)** in green — the Double Detector has not been used yet.
+- **(used)** in dim text — the Double Detector has already been used this mission.
+
+### Tile Stand
+
+Each player's stand is displayed as three lines below their header: a status indicator row, a values row, and a position letters row.
+
+```
+      ✓        i     ✓  ✓
+      1  ?  ?  6  ?  5  8 11
+      A  B  C  D  E  F  G  H
+```
+
+#### Position letters
+
+Each slot on the stand is labeled with a letter starting from **A** (leftmost) through the alphabet. Wires are always sorted in ascending order and stay in their position even after being cut.
+
+#### Wire values
+
+| Display | Meaning |
+|---------|---------|
+| **Blue number** (e.g., `5`, `12`) | A blue wire with that value. Shown dimmed when hidden, green when cut. |
+| **Y** | A yellow wire. All yellow wires share the gameplay value "YELLOW" regardless of their sort number. |
+| **R** | A red wire. |
+| **?** | An unknown wire — the observer cannot see this wire's identity (another player's hidden wire in calculator/perspective mode). |
+
+#### Status indicators
+
+Displayed directly above each wire value:
+
+| Symbol | Meaning |
+|--------|---------|
+| *(blank)* | **Hidden** — the wire is face-down and has not been acted on. |
+| **✓** (green) | **Cut** — the wire has been successfully cut. It remains in position but is face-up. |
+| **i** (bold) | **Info revealed** — a failed dual cut placed an info token on this wire, revealing its actual value. The wire is still uncut but its identity is now public. |
+
+### Game Over
+
+When the game ends, a status line appears at the bottom:
+- **MISSION SUCCESS!** in green — all players' stands are empty.
+- **MISSION FAILED!** in red — a red wire was cut or mistakes remaining hit zero and another mistake was made.
+
 ## Code Architecture
 
 ### Repository Layout
