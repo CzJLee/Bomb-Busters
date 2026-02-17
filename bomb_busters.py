@@ -7,14 +7,10 @@ Supports both full simulation mode and calculator/mid-game mode.
 
 from __future__ import annotations
 
+import dataclasses
+import enum
+import functools
 import random
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from functools import total_ordering
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
 
 
 # =============================================================================
@@ -36,11 +32,11 @@ class _Colors:
 # Enums
 # =============================================================================
 
-class WireColor(Enum):
+class WireColor(enum.Enum):
     """Color of a wire tile."""
-    BLUE = auto()
-    RED = auto()
-    YELLOW = auto()
+    BLUE = enum.auto()
+    RED = enum.auto()
+    YELLOW = enum.auto()
 
     def ansi(self) -> str:
         """Returns the ANSI color code for this wire color."""
@@ -51,43 +47,43 @@ class WireColor(Enum):
         }[self]
 
 
-class SlotState(Enum):
+class SlotState(enum.Enum):
     """State of a slot on a tile stand."""
-    HIDDEN = auto()
-    CUT = auto()
-    INFO_REVEALED = auto()
+    HIDDEN = enum.auto()
+    CUT = enum.auto()
+    INFO_REVEALED = enum.auto()
 
 
-class ActionType(Enum):
+class ActionType(enum.Enum):
     """Type of action a player can take on their turn."""
-    DUAL_CUT = auto()
-    SOLO_CUT = auto()
-    REVEAL_RED = auto()
+    DUAL_CUT = enum.auto()
+    SOLO_CUT = enum.auto()
+    REVEAL_RED = enum.auto()
 
 
-class ActionResult(Enum):
+class ActionResult(enum.Enum):
     """Result of a dual cut action."""
-    SUCCESS = auto()
-    FAIL_BLUE_YELLOW = auto()
-    FAIL_RED = auto()
+    SUCCESS = enum.auto()
+    FAIL_BLUE_YELLOW = enum.auto()
+    FAIL_RED = enum.auto()
 
 
-class MarkerState(Enum):
+class MarkerState(enum.Enum):
     """State of a board marker for red/yellow wires.
 
     KNOWN: blank side up — this wire value is definitely in play.
     UNCERTAIN: '?' side up — this wire value might be in play (X of Y mode).
     """
-    KNOWN = auto()
-    UNCERTAIN = auto()
+    KNOWN = enum.auto()
+    UNCERTAIN = enum.auto()
 
 
 # =============================================================================
 # Wire
 # =============================================================================
 
-@total_ordering
-@dataclass(frozen=True)
+@functools.total_ordering
+@dataclasses.dataclass(frozen=True)
 class Wire:
     """A physical wire tile in the game.
 
@@ -184,7 +180,7 @@ def create_all_yellow_wires() -> list[Wire]:
 # Slot
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class Slot:
     """A single position on a tile stand.
 
@@ -257,7 +253,7 @@ class Slot:
 # TileStand
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class TileStand:
     """A player's tile stand containing sorted wire tiles.
 
@@ -458,7 +454,7 @@ def get_sort_value_bounds(
 # CharacterCard
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class CharacterCard:
     """A character card with personal equipment.
 
@@ -508,7 +504,7 @@ def create_double_detector() -> CharacterCard:
 # Player
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class Player:
     """A bomb disposal expert in the game.
 
@@ -539,7 +535,7 @@ class Player:
 # Detonator
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class Detonator:
     """The bomb's detonator dial.
 
@@ -590,7 +586,7 @@ class Detonator:
 # InfoTokenPool
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class InfoTokenPool:
     """Pool of available info tokens.
 
@@ -601,7 +597,7 @@ class InfoTokenPool:
         blue_tokens: Dict mapping blue values (1-12) to available count.
         yellow_tokens: Number of available yellow info tokens.
     """
-    blue_tokens: dict[int, int] = field(default_factory=dict)
+    blue_tokens: dict[int, int] = dataclasses.field(default_factory=dict)
     yellow_tokens: int = 2
 
     @classmethod
@@ -651,7 +647,7 @@ class InfoTokenPool:
 # Marker
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class Marker:
     """A board marker indicating a red or yellow wire value in play.
 
@@ -679,7 +675,7 @@ class Marker:
 # Equipment
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class Equipment:
     """An equipment card that provides a special ability.
 
@@ -730,7 +726,7 @@ class Equipment:
 # Action Records
 # =============================================================================
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class DualCutAction:
     """Record of a dual cut action.
 
@@ -757,7 +753,7 @@ class DualCutAction:
     second_target_slot_index: int | None = None
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SoloCutAction:
     """Record of a solo cut action.
 
@@ -773,7 +769,7 @@ class SoloCutAction:
     wire_count: int
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class RevealRedAction:
     """Record of a reveal red wires action.
 
@@ -792,7 +788,7 @@ ActionRecord = DualCutAction | SoloCutAction | RevealRedAction
 # TurnHistory
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class TurnHistory:
     """Record of all actions taken during the game.
 
@@ -802,7 +798,7 @@ class TurnHistory:
     Attributes:
         actions: List of all action records in chronological order.
     """
-    actions: list[ActionRecord] = field(default_factory=list)
+    actions: list[ActionRecord] = dataclasses.field(default_factory=list)
 
     def record(self, action: ActionRecord) -> None:
         """Record a new action.
@@ -860,7 +856,7 @@ class TurnHistory:
 # WireConfig
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class WireConfig:
     """Configuration for including colored wires in a mission.
 
@@ -900,7 +896,7 @@ class WireConfig:
 # GameState
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class GameState:
     """The complete state of a Bomb Busters game.
 
@@ -935,7 +931,7 @@ class GameState:
     current_player_index: int = 0
     game_over: bool = False
     game_won: bool = False
-    wires_in_play: list[Wire] = field(default_factory=list)
+    wires_in_play: list[Wire] = dataclasses.field(default_factory=list)
     observer_index: int | None = None
 
     # -----------------------------------------------------------------

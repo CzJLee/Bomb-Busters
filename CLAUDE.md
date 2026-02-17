@@ -7,6 +7,7 @@ See @Bomb Busters Rulebook.pdf for the official published PDF rulebook of the ga
 ## Conventions
 
 - Always assume a 5-player count in examples unless otherwise specified.
+- Use Google Python Style Guide imports: `import module` only, never `from module import Class`. This applies to both project modules and standard library (e.g., `import dataclasses` not `from dataclasses import dataclass`).
 
 ## Project Overview
 

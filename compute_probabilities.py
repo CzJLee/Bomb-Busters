@@ -8,34 +8,19 @@ and turn history.
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass, field
-from typing import Sequence
+import collections
+import dataclasses
 
-from bomb_busters import (
-    ActionResult,
-    DualCutAction,
-    GameState,
-    Marker,
-    MarkerState,
-    Player,
-    Slot,
-    SlotState,
-    TileStand,
-    Wire,
-    WireColor,
-    create_all_blue_wires,
-    create_all_red_wires,
-    create_all_yellow_wires,
-    get_sort_value_bounds,
-)
+import bomb_busters
+
+_C = bomb_busters._Colors
 
 
 # =============================================================================
 # Known Information
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class KnownInfo:
     """All information known to the observing player.
 
@@ -56,16 +41,18 @@ class KnownInfo:
         wires_in_play: All wire objects that were shuffled into the game.
     """
     observer_index: int
-    observer_wires: list[Wire]
-    cut_wires: list[Wire]
+    observer_wires: list[bomb_busters.Wire]
+    cut_wires: list[bomb_busters.Wire]
     info_revealed: list[tuple[int, int, int | str]]
     validation_tokens: set[int]
     player_must_have: dict[int, set[int | str]]
-    markers: list[Marker]
-    wires_in_play: list[Wire]
+    markers: list[bomb_busters.Marker]
+    wires_in_play: list[bomb_busters.Wire]
 
 
-def extract_known_info(game: GameState, observer_index: int) -> KnownInfo:
+def extract_known_info(
+    game: bomb_busters.GameState, observer_index: int
+) -> KnownInfo:
     """Extract all information visible to the observing player.
 
     Collects the observer's own hand, all publicly visible information
@@ -113,7 +100,7 @@ def extract_known_info(game: GameState, observer_index: int) -> KnownInfo:
 
 
 def _compute_must_have(
-    game: GameState, observer_index: int
+    game: bomb_busters.GameState, observer_index: int
 ) -> dict[int, set[int | str]]:
     """Determine which values each player must still have from failed dual cuts.
 
@@ -130,8 +117,8 @@ def _compute_must_have(
     must_have: dict[int, set[int | str]] = {}
     for action in game.history.actions:
         if (
-            isinstance(action, DualCutAction)
-            and action.result == ActionResult.FAIL_BLUE_YELLOW
+            isinstance(action, bomb_busters.DualCutAction)
+            and action.result == bomb_busters.ActionResult.FAIL_BLUE_YELLOW
         ):
             actor = action.actor_index
             value = action.guessed_value
@@ -153,8 +140,8 @@ def _compute_must_have(
 # =============================================================================
 
 def compute_unknown_pool(
-    known: KnownInfo, game: GameState
-) -> list[Wire]:
+    known: KnownInfo, game: bomb_busters.GameState
+) -> list[bomb_busters.Wire]:
     """Compute the pool of wires whose locations are unknown to the observer.
 
     Unknown pool = all wires in play - observer's wires - cut wires
@@ -178,7 +165,7 @@ def compute_unknown_pool(
 
     # Remove cut wires from OTHER players only
     # (observer's cut wires are already removed above)
-    observer_cut_wires: list[Wire] = []
+    observer_cut_wires: list[bomb_busters.Wire] = []
     observer = game.players[known.observer_index]
     for slot in observer.tile_stand.slots:
         if slot.is_cut and slot.wire is not None:
@@ -203,11 +190,11 @@ def compute_unknown_pool(
 
 
 def _identify_info_revealed_wire(
-    game: GameState,
+    game: bomb_busters.GameState,
     player_index: int,
     slot_index: int,
     revealed_value: int | str,
-) -> Wire | None:
+) -> bomb_busters.Wire | None:
     """Identify the exact Wire at an info-revealed slot.
 
     In simulation mode, the wire is directly available. In calculator mode,
@@ -229,7 +216,7 @@ def _identify_info_revealed_wire(
     # Calculator mode: wire is None, use revealed_value to reconstruct
     if isinstance(revealed_value, int):
         # Blue wire with this value
-        return Wire(WireColor.BLUE, float(revealed_value))
+        return bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(revealed_value))
     elif revealed_value == "YELLOW":
         # Yellow wire — we know it's yellow but not the exact sort_value.
         # Use sort bounds to narrow down possibilities.
@@ -244,7 +231,7 @@ def _identify_info_revealed_wire(
 # Position Constraints
 # =============================================================================
 
-@dataclass
+@dataclasses.dataclass
 class PositionConstraint:
     """Sort-value constraints on a hidden slot.
 
@@ -262,7 +249,7 @@ class PositionConstraint:
     lower_bound: float
     upper_bound: float
 
-    def wire_fits(self, wire: Wire) -> bool:
+    def wire_fits(self, wire: bomb_busters.Wire) -> bool:
         """Check if a wire could legally occupy this position.
 
         Args:
@@ -275,7 +262,7 @@ class PositionConstraint:
 
 
 def compute_position_constraints(
-    game: GameState, observer_index: int
+    game: bomb_busters.GameState, observer_index: int
 ) -> list[PositionConstraint]:
     """Compute sort-value constraints for all hidden slots on other players' stands.
 
@@ -296,8 +283,10 @@ def compute_position_constraints(
             continue
         stand = player.tile_stand
         for s_idx, slot in enumerate(stand.slots):
-            if slot.state == SlotState.HIDDEN:
-                lower, upper = get_sort_value_bounds(stand.slots, s_idx)
+            if slot.state == bomb_busters.SlotState.HIDDEN:
+                lower, upper = bomb_busters.get_sort_value_bounds(
+                    stand.slots, s_idx,
+                )
                 constraints.append(PositionConstraint(
                     player_index=p_idx,
                     slot_index=s_idx,
@@ -312,8 +301,8 @@ def compute_position_constraints(
 # =============================================================================
 
 def compute_position_probabilities(
-    game: GameState, observer_index: int
-) -> dict[tuple[int, int], Counter[Wire]]:
+    game: bomb_busters.GameState, observer_index: int
+) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
     """Compute the probability distribution for each hidden slot.
 
     For each hidden position on other players' stands, counts how many
@@ -352,21 +341,21 @@ def compute_position_probabilities(
         all_positions.extend(positions_by_player[p_idx])
 
     # Get distinct wire types sorted by sort_value
-    pool_counter = Counter(unknown_pool)
+    pool_counter = collections.Counter(unknown_pool)
     distinct_wires = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
 
     # Result accumulators: (player, slot) -> Counter of wire -> valid count
-    result: dict[tuple[int, int], Counter[Wire]] = {
-        (c.player_index, c.slot_index): Counter()
+    result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {
+        (c.player_index, c.slot_index): collections.Counter()
         for c in all_positions
     }
     total_valid = [0]  # Use list for mutability in closure
 
     def backtrack(
         pos_idx: int,
-        remaining: dict[Wire, int],
+        remaining: dict[bomb_busters.Wire, int],
         last_sort_by_player: dict[int, float],
-        assignment: dict[int, Wire],
+        assignment: dict[int, bomb_busters.Wire],
     ) -> None:
         """Recursively assign wires to positions.
 
@@ -426,7 +415,7 @@ def compute_position_probabilities(
 
 
 def _check_must_have(
-    assignment: dict[int, Wire],
+    assignment: dict[int, bomb_busters.Wire],
     positions: list[PositionConstraint],
     must_have: dict[int, set[int | str]],
 ) -> bool:
@@ -458,7 +447,7 @@ def _check_must_have(
 # =============================================================================
 
 def probability_of_dual_cut(
-    game: GameState,
+    game: bomb_busters.GameState,
     observer_index: int,
     target_player_index: int,
     target_slot_index: int,
@@ -497,7 +486,7 @@ def probability_of_dual_cut(
 
 
 def probability_of_double_detector(
-    game: GameState,
+    game: bomb_busters.GameState,
     observer_index: int,
     target_player_index: int,
     slot_index_1: int,
@@ -541,7 +530,7 @@ def probability_of_double_detector(
     for p_idx in sorted(positions_by_player.keys()):
         all_positions.extend(positions_by_player[p_idx])
 
-    pool_counter = Counter(unknown_pool)
+    pool_counter = collections.Counter(unknown_pool)
     distinct_wires = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     must_have = known.player_must_have
 
@@ -558,9 +547,9 @@ def probability_of_double_detector(
 
     def backtrack(
         pos_idx: int,
-        remaining: dict[Wire, int],
+        remaining: dict[bomb_busters.Wire, int],
         last_sort_by_player: dict[int, float],
-        assignment: dict[int, Wire],
+        assignment: dict[int, bomb_busters.Wire],
     ) -> None:
         if pos_idx == len(all_positions):
             if _check_must_have(assignment, all_positions, must_have):
@@ -610,7 +599,7 @@ def probability_of_double_detector(
 
 
 def guaranteed_actions(
-    game: GameState, observer_index: int
+    game: bomb_busters.GameState, observer_index: int
 ) -> dict[str, list | bool]:
     """Find all actions guaranteed to succeed.
 
@@ -648,7 +637,7 @@ def guaranteed_actions(
     hidden = player.tile_stand.hidden_slots
     if hidden:
         all_red = all(
-            s.wire is not None and s.wire.color == WireColor.RED
+            s.wire is not None and s.wire.color == bomb_busters.WireColor.RED
             for _, s in hidden
         )
         result["reveal_red"] = all_red
@@ -676,7 +665,7 @@ def guaranteed_actions(
     return result
 
 
-@dataclass
+@dataclasses.dataclass
 class RankedMove:
     """A possible move ranked by probability of success.
 
@@ -717,7 +706,7 @@ class RankedMove:
 
 
 def rank_all_moves(
-    game: GameState, observer_index: int
+    game: bomb_busters.GameState, observer_index: int
 ) -> list[RankedMove]:
     """Rank all possible moves by probability of success.
 
@@ -746,7 +735,8 @@ def rank_all_moves(
     hidden = player.tile_stand.hidden_slots
     if hidden:
         all_red = all(
-            s.wire is not None and s.wire.color == WireColor.RED
+            s.wire is not None
+            and s.wire.color == bomb_busters.WireColor.RED
             for _, s in hidden
         )
         if all_red:
@@ -770,7 +760,7 @@ def rank_all_moves(
             continue
 
         # Group by gameplay_value
-        value_counts: Counter[int | str] = Counter()
+        value_counts: collections.Counter[int | str] = collections.Counter()
         for wire, count in counter.items():
             value_counts[wire.gameplay_value] += count
 
@@ -790,3 +780,146 @@ def rank_all_moves(
     # Sort by probability descending
     moves.sort(key=lambda m: m.probability, reverse=True)
     return moves
+
+
+# =============================================================================
+# Terminal Display
+# =============================================================================
+
+def _player_name(game: bomb_busters.GameState, index: int) -> str:
+    """Return a colored player name string."""
+    return f"{_C.BOLD}{game.players[index].name}{_C.RESET}"
+
+
+def _value_label(value: int | str) -> str:
+    """Return a colored label for a gameplay value."""
+    if isinstance(value, int):
+        return f"{_C.BLUE}{value}{_C.RESET}"
+    elif value == "YELLOW":
+        return f"{_C.YELLOW}Y{_C.RESET}"
+    elif value == "RED":
+        return f"{_C.RED}R{_C.RESET}"
+    return str(value)
+
+
+def _slot_letter(index: int) -> str:
+    """Return the letter label for a slot index."""
+    return chr(ord("A") + index)
+
+
+def _prob_colored(probability: float) -> str:
+    """Return a probability string colored by confidence level."""
+    if probability >= 1.0:
+        return f"{_C.GREEN}{_C.BOLD} 100%{_C.RESET}"
+    elif probability >= 0.75:
+        return f"{_C.GREEN}{probability:>5.1%}{_C.RESET}"
+    elif probability >= 0.50:
+        return f"{_C.BLUE}{probability:>5.1%}{_C.RESET}"
+    elif probability >= 0.25:
+        return f"{_C.YELLOW}{probability:>5.1%}{_C.RESET}"
+    else:
+        return f"{_C.RED}{probability:>5.1%}{_C.RESET}"
+
+
+def _format_move(
+    game: bomb_busters.GameState, move: RankedMove, rank: int
+) -> str:
+    """Format a single ranked move as a colored terminal line."""
+    num = f"{rank:>2}."
+    prob = _prob_colored(move.probability)
+    val = _value_label(move.guessed_value) if move.guessed_value is not None else "?"
+
+    if move.action_type == "solo_cut":
+        return f"  {num} {prob}  Solo Cut {val}"
+    elif move.action_type == "reveal_red":
+        return f"  {num} {prob}  Reveal Red Wires"
+    elif move.action_type == "dual_cut" and move.target_player is not None:
+        target = _player_name(game, move.target_player)
+        slot = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
+        return (
+            f"  {num} {prob}  Dual Cut → {target}"
+            f" [{_C.BOLD}{slot}{_C.RESET}] = {val}"
+        )
+    elif (
+        move.action_type == "double_detector"
+        and move.target_player is not None
+    ):
+        target = _player_name(game, move.target_player)
+        s1 = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
+        s2 = _slot_letter(move.second_slot) if move.second_slot is not None else "?"
+        return (
+            f"  {num} {prob}  DD → {target}"
+            f" [{_C.BOLD}{s1},{s2}{_C.RESET}] = {val}"
+        )
+    return f"  {num} {prob}  {move}"
+
+
+def print_probability_analysis(
+    game: bomb_busters.GameState,
+    observer_index: int,
+    max_moves: int = 10,
+) -> None:
+    """Print a probability analysis for the active player.
+
+    Shows guaranteed actions, then ranks the top moves by success
+    probability with colored output.
+
+    Args:
+        game: The current game state.
+        observer_index: The player whose perspective to analyze.
+        max_moves: Maximum number of ranked moves to display.
+    """
+    player = game.players[observer_index]
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print(
+        f"{_C.BOLD}Probability Analysis for "
+        f"{player.name} (Player {observer_index}){_C.RESET}"
+    )
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print()
+
+    # Guaranteed actions
+    ga = guaranteed_actions(game, observer_index)
+    solo_cuts: list[tuple[int | str, list[int]]] = ga["solo_cuts"]  # type: ignore[assignment]
+    guaranteed_duals: list[tuple[int, int, int | str]] = ga["dual_cuts"]  # type: ignore[assignment]
+    reveal_red: bool = ga["reveal_red"]  # type: ignore[assignment]
+
+    has_guaranteed = solo_cuts or guaranteed_duals or reveal_red
+    if has_guaranteed:
+        print(f"  {_C.GREEN}{_C.BOLD}Guaranteed actions:{_C.RESET}")
+        for value, slots in solo_cuts:
+            slot_letters = ", ".join(_slot_letter(s) for s in slots)
+            print(
+                f"    • Solo Cut {_value_label(value)}"
+                f" (slots {slot_letters})"
+            )
+        for p_idx, s_idx, value in guaranteed_duals:
+            target = _player_name(game, p_idx)
+            print(
+                f"    • Dual Cut → {target}"
+                f" [{_C.BOLD}{_slot_letter(s_idx)}{_C.RESET}]"
+                f" = {_value_label(value)}"
+            )
+        if reveal_red:
+            print(f"    • Reveal Red Wires")
+        print()
+
+    # Ranked moves
+    moves = rank_all_moves(game, observer_index)
+
+    if not moves:
+        print(f"  {_C.DIM}No available moves.{_C.RESET}")
+        return
+
+    shown = moves[:max_moves]
+    remaining = len(moves) - len(shown)
+
+    print(f"  {_C.BOLD}Top moves by probability:{_C.RESET}")
+    print()
+    for i, move in enumerate(shown, 1):
+        print(_format_move(game, move, i))
+    print()
+
+    if remaining > 0:
+        print(f"  {_C.DIM}... and {remaining} more moves{_C.RESET}")
+        print()
