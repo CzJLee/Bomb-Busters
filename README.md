@@ -89,5 +89,103 @@ change which player is the Captain and restart the mission!
 
 These are some useful tips / shortcuts that can be used in some of the calculations or can be used to make simplifications.
 
-- If a player attempts and fails to cut a wire with a `dual cut` action, we know that they have at least one wire of that value. 
-- You can narrow down the possibilities of wires in someone's `tile stand` by referencing which wires are fully cut. You know that those numbers can not exist on someones stand. 
+- If a player attempts and fails to cut a wire with a `dual cut` action, we know that they have at least one wire of that value.
+- You can narrow down the possibilities of wires in someone's `tile stand` by referencing which wires are fully cut. You know that those numbers can not exist on someones stand.
+
+## Code Architecture
+
+### Repository Layout
+
+```
+bomb_busters.py              # Game model: enums, dataclasses, game state, actions
+compute_probabilities.py     # Probability engine: constraint solver and API
+tests/
+  __init__.py
+  test_bomb_busters.py       # 108 tests for the game model
+  test_compute_probabilities.py  # 24 tests for the probability engine
+CLAUDE.md                    # Project instructions for Claude
+README.md                    # This file
+Bomb Busters Rulebook.pdf    # Official rulebook
+Bomb Busters FAQ.pdf         # Official FAQ
+```
+
+### Game Model (`bomb_busters.py`)
+
+#### Enums
+
+| Enum | Values | Description |
+|------|--------|-------------|
+| `WireColor` | BLUE, RED, YELLOW | Color of a wire tile |
+| `SlotState` | HIDDEN, CUT, INFO_REVEALED | State of a tile stand slot |
+| `ActionType` | DUAL_CUT, SOLO_CUT, REVEAL_RED | Player action types |
+| `ActionResult` | SUCCESS, FAIL_BLUE_YELLOW, FAIL_RED | Dual cut outcomes |
+| `MarkerState` | KNOWN, UNCERTAIN | Board marker state (certain vs "X of Y" mode) |
+
+#### Core Classes
+
+**`Wire`** (frozen dataclass) — A physical wire tile. Uses a `sort_value` encoding for natural sort order: blue N = `N.0`, yellow = `N.1`, red = `N.5`. Properties: `base_number` (integer part), `gameplay_value` (int 1-12 for blue, `"YELLOW"`, or `"RED"`).
+
+**`Slot`** — A single position on a tile stand. Holds a `Wire` (or `None` in calculator mode), a `SlotState`, and an optional `info_token` value.
+
+**`TileStand`** — A player's wire rack. Slots are always sorted ascending by `sort_value`. Wires stay in position even after being cut. Properties: `hidden_slots`, `cut_slots`, `is_empty`, `remaining_count`.
+
+**`Player`** — A bomb disposal expert with a `TileStand` and optional `CharacterCard`.
+
+**`CharacterCard`** — A one-use personal ability (e.g., Double Detector). Tracks `used` status.
+
+**`Detonator`** — The bomb's failure counter. With N players, N-1 failures are tolerated. Tracks `failures`, `max_failures`, `is_exploded`, `remaining_failures`.
+
+**`InfoTokenPool`** — Pool of 26 info tokens (2 per blue value 1-12, plus 2 yellow). Tokens are consumed on failed dual cuts.
+
+**`Marker`** — Board marker for red/yellow wires in play. State is `KNOWN` (direct inclusion) or `UNCERTAIN` ("X of Y" selection mode).
+
+**`Equipment`** — Extensible equipment card with `unlock_value` (unlocked when 2 wires of that value are cut) and `used` tracking.
+
+**`WireConfig`** — Mission setup for colored wires. Specifies `count` wires in play, with optional `pool_size` for "X of Y" random selection.
+
+#### Action Records
+
+**`DualCutAction`** — Records actor, target, guessed value, result, and Double Detector details.
+
+**`SoloCutAction`** — Records actor, value, slot indices, and wire count (2 or 4).
+
+**`RevealRedAction`** — Records actor and revealed slot indices.
+
+**`TurnHistory`** — Chronological list of all actions. Supports deduction queries like `failed_dual_cuts_by_player()`.
+
+#### GameState
+
+The central class managing the full game. Two factory methods:
+
+- **`GameState.create_game(player_names, wire_configs, seed)`** — Simulation mode. Shuffles wires, deals evenly (captain + next player get extras if uneven), sorts stands, places markers. All wire identities are known.
+
+- **`GameState.from_partial_state(...)`** — Calculator mode. Enter a mid-game state directly for probability calculations without replaying turns. Other players' hidden wires are set to `None`.
+
+Action execution methods: `execute_dual_cut()`, `execute_solo_cut()`, `execute_reveal_red()`. Each validates the action, resolves outcomes, updates the detonator, places info tokens, checks validation tokens, and records to history.
+
+### Probability Engine (`compute_probabilities.py`)
+
+#### Knowledge Extraction
+
+**`KnownInfo`** — Aggregates all information visible to the observing player: their own wires, all cut wires, info tokens, validation tokens, markers, and must-have deductions from turn history.
+
+**`extract_known_info(game, observer_index)`** — Collects public + private knowledge into a `KnownInfo` object.
+
+**`compute_unknown_pool(known, game)`** — Computes the set of wires whose locations are unknown: all wires in play minus observer's wires, minus other players' cut/revealed wires.
+
+#### Constraint Solver
+
+**`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions).
+
+**`compute_position_probabilities(game, observer_index)`** — Backtracking solver that enumerates all valid wire-to-position assignments. Uses identical-wire grouping via `Counter` (e.g., four blue-5s are interchangeable) and sort-order pruning for efficiency. Returns `{(player_index, slot_index): Counter({Wire: count})}`.
+
+#### High-Level API
+
+| Function | Description |
+|----------|-------------|
+| `probability_of_dual_cut(game, observer, target_player, target_slot, value)` | Probability that a specific dual cut succeeds (0.0 to 1.0) |
+| `probability_of_double_detector(game, observer, target_player, slot1, slot2, value)` | Joint probability for Double Detector (not naive independence) |
+| `guaranteed_actions(game, observer)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
+| `rank_all_moves(game, observer)` | Rank all possible moves by probability, sorted descending |
+
+**`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, and `probability`. Supports `__str__` for display.

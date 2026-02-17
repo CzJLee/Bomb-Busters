@@ -14,12 +14,18 @@ This repo should create a Python class structure for different game components t
 
 ### Probability calculations
 
-At this point in time, this project desires to compute the probability of specific events. E.g. "What is the % probability that I successfully dual cut this "2" on this players tile stand." Or, "What guaranteed cut actions do I have?" Or, "What is the highest probability cut action I have?" 
+The probability engine in @compute_probabilities.py computes the following from any player's perspective:
+
+- **Specific cut probability**: "What is the % probability that I successfully dual cut this '2' on this player's tile stand?"
+- **Guaranteed actions**: "What solo cuts, dual cuts, or reveal-red actions are 100% guaranteed to succeed?"
+- **Best move ranking**: "What is the highest probability cut action I have?" — ranks all possible moves by probability descending.
+- **Double Detector probability**: Joint probability that at least one of two target slots matches the guessed value (computed from enumerated distributions, not naive independence).
+- **Equipment modifications**: The engine accepts the full game state including equipment, so future equipment that modifies cut rules can be integrated.
 
 ## Architecture
 
-- The python file @bomb_busters.py contains game specific info. 
-- The python file @compute_probabilities.py contains python logic to compute probabilities of certain events taking into consideration different sources of information. 
+- @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `InfoTokenPool`, `Marker`, `Equipment`, `WireConfig`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
+- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
 
