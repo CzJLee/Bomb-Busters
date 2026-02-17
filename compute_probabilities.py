@@ -851,6 +851,254 @@ def probability_of_double_detector(
     return match_count / total_count
 
 
+def probability_of_red_wire(
+    game: bomb_busters.GameState,
+    observer_index: int,
+    target_player_index: int,
+    target_slot_index: int,
+    probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
+    | None = None,
+) -> float:
+    """Compute the probability that a specific slot contains a red wire.
+
+    Calculates P(target slot is a red wire) from the observer's perspective,
+    considering all known information and constraints.
+
+    Args:
+        game: The current game state.
+        observer_index: The observing player's index.
+        target_player_index: Index of the target player.
+        target_slot_index: Slot index on the target's stand.
+        probs: Pre-computed position probabilities. If None, will be
+            computed internally.
+
+    Returns:
+        Probability of the slot containing a red wire (0.0 to 1.0).
+    """
+    if probs is None:
+        probs = compute_position_probabilities(game, observer_index)
+    key = (target_player_index, target_slot_index)
+    if key not in probs:
+        return 0.0
+
+    counter = probs[key]
+    total = sum(counter.values())
+    if total == 0:
+        return 0.0
+
+    red_count = sum(
+        count for wire, count in counter.items()
+        if wire.color == bomb_busters.WireColor.RED
+    )
+    return red_count / total
+
+
+def probability_of_red_wire_dd(
+    game: bomb_busters.GameState,
+    observer_index: int,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+) -> float:
+    """Compute the probability that a Double Detector fails by hitting red.
+
+    With the Double Detector, the bomb only explodes if BOTH targeted slots
+    contain red wires. If only one is red and the other is not, the bomb
+    does not explode (an info token is placed on the non-red wire instead).
+
+    This computes P(both slots are red) using joint enumeration from the
+    constraint solver, not naive independence assumptions.
+
+    Args:
+        game: The current game state.
+        observer_index: The observing player's index.
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+
+    Returns:
+        Probability that both slots are red wires (0.0 to 1.0).
+    """
+    setup = _setup_solver(game, observer_index)
+    if setup is None:
+        return 0.0
+
+    (
+        positions_by_player,
+        player_order,
+        distinct_wires,
+        _pool_counter,
+        initial_pool,
+        must_have,
+    ) = setup
+    num_players = len(player_order)
+
+    # Find the target player's index in player_order and
+    # which position indices correspond to the two target slots.
+    target_pli: int | None = None
+    target_pos_indices: list[int] = []
+    for pli, p in enumerate(player_order):
+        if p == target_player_index:
+            target_pli = pli
+            for pi, pc in enumerate(positions_by_player[p]):
+                if pc.slot_index in (slot_index_1, slot_index_2):
+                    target_pos_indices.append(pi)
+            break
+
+    if target_pli is None or len(target_pos_indices) != 2:
+        return 0.0
+
+    # Build memo using the same _solve structure as probability_of_double_detector.
+    memo: dict[
+        tuple[int, tuple[int, ...]],
+        tuple[int, dict[int, collections.Counter[bomb_busters.Wire]],
+              dict[tuple[int, ...], int]],
+    ] = {}
+
+    def _solve(
+        pli: int, remaining: tuple[int, ...],
+    ) -> tuple[int, dict, dict]:
+        key = (pli, remaining)
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+
+        if pli == num_players:
+            entry = (1, {}, {})
+            memo[key] = entry
+            return entry
+
+        p = player_order[pli]
+        positions = positions_by_player[p]
+        required = must_have.get(p, set())
+        rem = list(remaining)
+        total = [0]
+        slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
+        transitions: dict[tuple[int, ...], int] = {}
+
+        def _bt(
+            pi: int, min_sv: float,
+            seq: list[bomb_busters.Wire], seen: set[int | str],
+        ) -> None:
+            if pi == len(positions):
+                if required and not required.issubset(seen):
+                    return
+                new_remaining = tuple(rem)
+                sub_total = _solve(pli + 1, new_remaining)[0]
+                if sub_total == 0:
+                    return
+                total[0] += sub_total
+                for idx, wire in enumerate(seq):
+                    counter = slot_counts.get(idx)
+                    if counter is None:
+                        counter = collections.Counter()
+                        slot_counts[idx] = counter
+                    counter[wire] += sub_total
+                transitions[new_remaining] = (
+                    transitions.get(new_remaining, 0) + 1
+                )
+                return
+
+            pc = positions[pi]
+            lo = max(pc.lower_bound, min_sv)
+            for i, w in enumerate(distinct_wires):
+                if rem[i] <= 0:
+                    continue
+                if w.sort_value < lo:
+                    continue
+                if w.sort_value > pc.upper_bound:
+                    break
+                rem[i] -= 1
+                seq.append(w)
+                new_seen = (
+                    seen | {w.gameplay_value} if required else seen
+                )
+                _bt(pi + 1, w.sort_value, seq, new_seen)
+                seq.pop()
+                rem[i] += 1
+
+        _bt(0, 0.0, [], set())
+        entry = (total[0], slot_counts, transitions)
+        memo[key] = entry
+        return entry
+
+    root_total = _solve(0, initial_pool)[0]
+    if root_total == 0:
+        return 0.0
+
+    # Forward pass: advance frontier to the target player.
+    frontier: dict[tuple[int, ...], int] = {initial_pool: 1}
+
+    for pli in range(num_players):
+        if pli == target_pli:
+            break
+        next_frontier: dict[tuple[int, ...], int] = {}
+        for remaining, fwd_weight in frontier.items():
+            transitions = memo[(pli, remaining)][2]
+            for new_rem, seq_count in transitions.items():
+                next_frontier[new_rem] = (
+                    next_frontier.get(new_rem, 0)
+                    + fwd_weight * seq_count
+                )
+        frontier = next_frontier
+
+    # At target_pli: enumerate target player's sequences, checking
+    # whether both target slots are red.
+    total_count = 0
+    both_red_count = 0
+
+    p = player_order[target_pli]
+    positions = positions_by_player[p]
+    required = must_have.get(p, set())
+
+    for remaining, fwd_weight in frontier.items():
+        rem = list(remaining)
+
+        def _bt_red(
+            pi: int, min_sv: float,
+            seq: list[bomb_busters.Wire], seen: set[int | str],
+        ) -> None:
+            nonlocal total_count, both_red_count
+            if pi == len(positions):
+                if required and not required.issubset(seen):
+                    return
+                sub_ways = _solve(target_pli + 1, tuple(rem))[0]
+                if sub_ways == 0:
+                    return
+                weight = fwd_weight * sub_ways
+                total_count += weight
+                if all(
+                    seq[tpi].color == bomb_busters.WireColor.RED
+                    for tpi in target_pos_indices
+                ):
+                    both_red_count += weight
+                return
+
+            pc = positions[pi]
+            lo = max(pc.lower_bound, min_sv)
+            for i, w in enumerate(distinct_wires):
+                if rem[i] <= 0:
+                    continue
+                if w.sort_value < lo:
+                    continue
+                if w.sort_value > pc.upper_bound:
+                    break
+                rem[i] -= 1
+                seq.append(w)
+                new_seen = (
+                    seen | {w.gameplay_value} if required else seen
+                )
+                _bt_red(pi + 1, w.sort_value, seq, new_seen)
+                seq.pop()
+                rem[i] += 1
+
+        _bt_red(0, 0.0, [], set())
+
+    if total_count == 0:
+        return 0.0
+    return both_red_count / total_count
+
+
 def guaranteed_actions(
     game: bomb_busters.GameState,
     observer_index: int,
@@ -935,6 +1183,9 @@ class RankedMove:
         second_slot: Second slot index (for double detector).
         guessed_value: The value being guessed.
         probability: Probability of success (0.0 to 1.0).
+        red_probability: Probability that the target slot is a red wire
+            (0.0 to 1.0). For Double Detector, this is the probability
+            that both target slots are red (the only way DD fails with red).
     """
     action_type: str
     target_player: int | None = None
@@ -942,8 +1193,10 @@ class RankedMove:
     second_slot: int | None = None
     guessed_value: int | str | None = None
     probability: float = 0.0
+    red_probability: float = 0.0
 
     def __str__(self) -> str:
+        red = f" [RED {self.red_probability:.1%}]" if self.red_probability > 0 else ""
         if self.action_type == "solo_cut":
             return f"Solo Cut {self.guessed_value} (100%)"
         elif self.action_type == "reveal_red":
@@ -953,14 +1206,14 @@ class RankedMove:
                 f"DD P{self.target_player}"
                 f"[{self.target_slot},{self.second_slot}]"
                 f" = {self.guessed_value}"
-                f" ({self.probability:.1%})"
+                f" ({self.probability:.1%}){red}"
             )
         else:
             return (
                 f"Dual Cut P{self.target_player}"
                 f"[{self.target_slot}]"
                 f" = {self.guessed_value}"
-                f" ({self.probability:.1%})"
+                f" ({self.probability:.1%}){red}"
             )
 
 
@@ -1024,6 +1277,13 @@ def rank_all_moves(
         if total == 0:
             continue
 
+        # Compute red wire probability for this slot
+        red_count = sum(
+            count for wire, count in counter.items()
+            if wire.color == bomb_busters.WireColor.RED
+        )
+        slot_red_prob = red_count / total if total > 0 else 0.0
+
         # Group by gameplay_value
         value_counts: collections.Counter[int | str] = collections.Counter()
         for wire, count in counter.items():
@@ -1040,6 +1300,7 @@ def rank_all_moves(
                     target_slot=s_idx,
                     guessed_value=value,
                     probability=prob,
+                    red_probability=slot_red_prob,
                 ))
 
     # Sort by probability descending
@@ -1086,6 +1347,13 @@ def _prob_colored(probability: float) -> str:
         return f"{_C.RED}{probability:>5.1%}{_C.RESET}"
 
 
+def _red_warning(red_prob: float) -> str:
+    """Return a colored red wire warning string, or empty if zero."""
+    if red_prob <= 0:
+        return ""
+    return f"  {_C.RED}⚠ RED {red_prob:.1%}{_C.RESET}"
+
+
 def _format_move(
     game: bomb_busters.GameState, move: RankedMove, rank: int
 ) -> str:
@@ -1093,6 +1361,7 @@ def _format_move(
     num = f"{rank:>2}."
     prob = _prob_colored(move.probability)
     val = _value_label(move.guessed_value) if move.guessed_value is not None else "?"
+    red = _red_warning(move.red_probability)
 
     if move.action_type == "solo_cut":
         return f"  {num} {prob}  Solo Cut {val}"
@@ -1103,7 +1372,7 @@ def _format_move(
         slot = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
         return (
             f"  {num} {prob}  Dual Cut → {target}"
-            f" [{_C.BOLD}{slot}{_C.RESET}] = {val}"
+            f" [{_C.BOLD}{slot}{_C.RESET}] = {val}{red}"
         )
     elif (
         move.action_type == "double_detector"
@@ -1114,7 +1383,7 @@ def _format_move(
         s2 = _slot_letter(move.second_slot) if move.second_slot is not None else "?"
         return (
             f"  {num} {prob}  DD → {target}"
-            f" [{_C.BOLD}{s1},{s2}{_C.RESET}] = {val}"
+            f" [{_C.BOLD}{s1},{s2}{_C.RESET}] = {val}{red}"
         )
     return f"  {num} {prob}  {move}"
 

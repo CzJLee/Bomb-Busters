@@ -783,5 +783,659 @@ class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
         )
 
 
+class TestProbabilityOfRedWire(unittest.TestCase):
+    """Tests for compute_probabilities.probability_of_red_wire."""
+
+    def test_no_red_wires_in_play(self) -> None:
+        """When no red wires are in the game, P(red) is always 0%."""
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+        ])
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        for p_idx in range(1, 4):
+            for s_idx in range(2):
+                red_p = compute_probabilities.probability_of_red_wire(
+                    game, 0, p_idx, s_idx, probs=probs,
+                )
+                self.assertAlmostEqual(
+                    red_p, 0.0,
+                    msg=f"P{p_idx}[{s_idx}] should have 0% red with no red wires",
+                )
+
+    def test_red_in_range_nonzero(self) -> None:
+        """Red wire in range of a hidden slot gives P(red) > 0%.
+
+        P0: [blue-4, blue-8]
+        P1: [blue-3, red-3.5, blue-5] — Bob's slot A cut
+        After cutting P1[0], P1[1] has bounds [3.0, 13.0].
+        Red-3.5 fits → P(red at P1[1]) > 0%.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        game.players[1].tile_stand.cut_wire_at(0)  # Cut blue-3
+        red_p = compute_probabilities.probability_of_red_wire(game, 0, 1, 1)
+        self.assertGreater(red_p, 0.0)
+
+    def test_red_out_of_range_zero(self) -> None:
+        """Red wire guaranteed out of range gives P(red) = 0%.
+
+        P0: [blue-4, blue-8]
+        P1: [blue-3, red-3.5, blue-5] — slots A and C cut
+        P1[1] has bounds [3.0, 5.0]. Red-3.5 fits. But if we
+        constrain differently:
+        P1: [blue-1, blue-5, blue-6] with red-8.5 somewhere else.
+        P1[1] has bounds [1.0, 6.0] if A and C cut → red-8.5 doesn't fit.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 8.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 8.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # Cut P1 slots A and C to constrain P1[1] to [1.0, 6.0]
+        game.players[1].tile_stand.cut_wire_at(0)  # blue-1
+        game.players[1].tile_stand.cut_wire_at(2)  # blue-6
+        # P1[1] must have sort_value in [1.0, 6.0]. Red-8.5 doesn't fit.
+        red_p = compute_probabilities.probability_of_red_wire(game, 0, 1, 1)
+        self.assertAlmostEqual(red_p, 0.0)
+
+    def test_all_red_already_revealed(self) -> None:
+        """If all red wires are already exposed (cut), P(red) = 0%.
+
+        One red wire in play, already cut via reveal-red. No hidden red
+        wires remain anywhere.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            # P3 had only a red wire left, revealed it
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # P3's red wire is already cut (revealed)
+        game.players[3].tile_stand.cut_wire_at(0)
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        for p_idx in range(1, 3):
+            for s_idx in range(2):
+                red_p = compute_probabilities.probability_of_red_wire(
+                    game, 0, p_idx, s_idx, probs=probs,
+                )
+                self.assertAlmostEqual(
+                    red_p, 0.0,
+                    msg=f"All reds revealed, P{p_idx}[{s_idx}] should be 0%",
+                )
+
+    def test_100_percent_dual_cut_means_zero_red(self) -> None:
+        """If dual cut success is 100%, red probability must be 0%.
+
+        When a slot is known to be a specific blue wire, it cannot be red.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 7.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # Cut all of P2 and P3 so P1 is determined
+        for i in range(2):
+            game.players[2].tile_stand.cut_wire_at(i)
+            game.players[3].tile_stand.cut_wire_at(i)
+
+        # P1 must be [11, 12] → 100% certain
+        prob_11 = compute_probabilities.probability_of_dual_cut(
+            game, 0, 1, 0, 11,
+        )
+        self.assertAlmostEqual(prob_11, 1.0)
+        red_p = compute_probabilities.probability_of_red_wire(game, 0, 1, 0)
+        self.assertAlmostEqual(red_p, 0.0)
+
+    def test_guaranteed_red_wire(self) -> None:
+        """Slot guaranteed to be red → P(dual cut success) = 0%, P(red) = 100%.
+
+        P0: [blue-1, blue-12]
+        P1: [red-5.5] — only one hidden slot, must be red
+        P2: [blue-5, blue-6]
+        P3: [blue-7, blue-8]
+        All P2 and P3 cut → pool = [red-5.5] → P1[0] must be red.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 5.5)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 5.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        for i in range(2):
+            game.players[2].tile_stand.cut_wire_at(i)
+            game.players[3].tile_stand.cut_wire_at(i)
+
+        red_p = compute_probabilities.probability_of_red_wire(game, 0, 1, 0)
+        self.assertAlmostEqual(red_p, 1.0)
+
+        # No blue value can be dual-cut at this position
+        for val in range(1, 13):
+            prob = compute_probabilities.probability_of_dual_cut(
+                game, 0, 1, 0, val,
+            )
+            self.assertAlmostEqual(
+                prob, 0.0,
+                msg=f"Dual cut for value {val} on guaranteed red should be 0%",
+            )
+
+    def test_red_is_not_one_minus_success(self) -> None:
+        """P(red) != 1 - P(success) and P(success) != 1 - P(red).
+
+        When there are blue, yellow, and red wires, a failed dual cut
+        could be due to a different blue/yellow wire (not red).
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        game.players[1].tile_stand.cut_wire_at(0)  # Cut blue-3
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        red_p = compute_probabilities.probability_of_red_wire(
+            game, 0, 1, 1, probs=probs,
+        )
+        success_p = compute_probabilities.probability_of_dual_cut(
+            game, 0, 1, 1, 5,
+        )
+
+        # With red + non-matching blue in the pool, neither relation holds
+        self.assertGreater(red_p, 0.0)
+        self.assertGreater(success_p, 0.0)
+        # P(red) + P(success for value 5) < 1.0 because other blues can be there
+        self.assertLess(red_p + success_p, 1.0 + 1e-9)
+        # They are not complements
+        self.assertNotAlmostEqual(red_p, 1.0 - success_p)
+
+    def test_x_of_y_red_wire_probability(self) -> None:
+        """X of Y mode: 1 of 2 possible red values in play.
+
+        Uses from_partial_state with UNCERTAIN markers for 2 red values
+        but only 1 actually in the game. The solver should account for
+        the red wire being somewhere in the unknown pool.
+
+        P0 (observer): [blue-1, blue-9]  (2 wires)
+        P1: [CUT-2, HIDDEN, HIDDEN]      (2 hidden)
+        P2: [HIDDEN, HIDDEN]              (2 hidden)
+        P3: [HIDDEN]                      (1 hidden)
+
+        Total wires: 8 (6 blue + 1 red). Observer has 2, P1 cut has 1.
+        Unknown pool = 8 - 2 - 1 = 5 wires for 5 hidden positions.
+        """
+        all_blue = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                    for i in [1, 2, 5, 6, 8, 9]]
+        red_wire = bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5)
+        # Add another blue wire to balance pool vs positions
+        extra_blue = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)
+        all_wires = all_blue + [red_wire, extra_blue]
+
+        stands = [
+            # P0: knows own hand
+            [bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+             bomb_busters.Slot(
+                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0))],
+            # P1: one cut, two hidden
+            [bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                state=bomb_busters.SlotState.CUT),
+             bomb_busters.Slot(wire=None),
+             bomb_busters.Slot(wire=None)],
+            # P2: two hidden
+            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            # P3: one hidden
+            [bomb_busters.Slot(wire=None)],
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 3.5,
+                    bomb_busters.MarkerState.UNCERTAIN,
+                ),
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 7.5,
+                    bomb_busters.MarkerState.UNCERTAIN,
+                ),
+            ],
+            wires_in_play=all_wires,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        # P1[1] has bounds [2.0, 13.0]. Red-3.5 fits → P(red) > 0
+        red_p1_1 = compute_probabilities.probability_of_red_wire(
+            game, 0, 1, 1, probs=probs,
+        )
+        self.assertGreater(red_p1_1, 0.0)
+
+        # Total red probability across all hidden slots should sum to
+        # exactly 1 red wire distributed somewhere
+        total_red = 0.0
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            red_count = sum(
+                c for w, c in counter.items()
+                if w.color == bomb_busters.WireColor.RED
+            )
+            total_red += red_count / total
+        # Should be close to 1.0 (one red wire exists somewhere)
+        self.assertAlmostEqual(total_red, 1.0, places=5)
+
+    def test_x_of_y_deduced_from_game_state(self) -> None:
+        """When game state eliminates one X-of-Y candidate, probability updates.
+
+        1 of 2 red wires is in play (red-3.5 or red-7.5). Only red-3.5
+        is actually in wires_in_play. All hidden slots on P1 have bounds
+        [2.0, 5.0] so red-7.5 (which isn't in the pool anyway) wouldn't
+        fit. The red-3.5 DOES fit and should have nonzero probability.
+
+        P0 (observer): [blue-1, blue-6]  (2 wires)
+        P1: [CUT-2, HIDDEN, CUT-5]       (1 hidden)
+        P2: [HIDDEN]                      (1 hidden)
+        P3: [HIDDEN]                      (1 hidden)
+
+        Total wires: 6 (5 blue + 1 red). Observer has 2, 2 cut.
+        Unknown pool = 6 - 2 - 2 = 2? No wait, observer wires include
+        cut wires too? No, observer_wires are P0's wires. P1's cut wires
+        are separate.
+
+        Let's be precise: wires_in_play has 6 wires.
+        Observer wires (P0): blue-1, blue-6 → 2 removed.
+        Other cut wires: P1[0]=blue-2, P1[2]=blue-5 → 2 removed.
+        Unknown pool = 6 - 2 - 2 = 2 wires: [blue-3, red-3.5]
+        Hidden positions: P1[1], P2[0], P3[0] = 3 positions.
+        But 2 wires for 3 positions is inconsistent!
+
+        Fix: add another wire to balance.
+        """
+        all_blue = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                    for i in [1, 2, 3, 4, 5, 6]]
+        red_wire = bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5)
+        all_wires = all_blue + [red_wire]
+        # 7 total wires. Observer has 2, P1 has 2 cut → pool = 3, positions = 3.
+
+        stands = [
+            # P0 (observer)
+            [bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+             bomb_busters.Slot(
+                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0))],
+            # P1: [CUT-2, HIDDEN, CUT-5]
+            [bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                state=bomb_busters.SlotState.CUT),
+             bomb_busters.Slot(wire=None),
+             bomb_busters.Slot(
+                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                 state=bomb_busters.SlotState.CUT)],
+            # P2: [HIDDEN]
+            [bomb_busters.Slot(wire=None)],
+            # P3: [HIDDEN]
+            [bomb_busters.Slot(wire=None)],
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 3.5,
+                    bomb_busters.MarkerState.UNCERTAIN,
+                ),
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 7.5,
+                    bomb_busters.MarkerState.UNCERTAIN,
+                ),
+            ],
+            wires_in_play=all_wires,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        # P1[1] has bounds [2.0, 5.0]. Red-3.5 fits.
+        # Pool = [blue-3, red-3.5, blue-4] → 3 wires, 3 positions.
+        red_p1_1 = compute_probabilities.probability_of_red_wire(
+            game, 0, 1, 1, probs=probs,
+        )
+        self.assertGreater(
+            red_p1_1, 0.0,
+            "Red-3.5 fits in [2.0, 5.0] bounds, should have nonzero probability",
+        )
+
+        # P2[0] and P3[0] have wide bounds [0, 13]. Red-3.5 also fits there.
+        red_p2_0 = compute_probabilities.probability_of_red_wire(
+            game, 0, 2, 0, probs=probs,
+        )
+        red_p3_0 = compute_probabilities.probability_of_red_wire(
+            game, 0, 3, 0, probs=probs,
+        )
+        # All three positions can potentially have the red wire
+        self.assertGreater(red_p2_0, 0.0)
+        self.assertGreater(red_p3_0, 0.0)
+
+
+class TestProbabilityOfRedWireDD(unittest.TestCase):
+    """Tests for compute_probabilities.probability_of_red_wire_dd."""
+
+    def test_dd_one_red_in_play_zero_red_explosion(self) -> None:
+        """With DD and only 1 red wire in play, P(both red) = 0%.
+
+        Double Detector targeting 2 slots: the bomb only explodes if
+        BOTH are red. With only 1 red wire in the game, it's impossible
+        for both to be red simultaneously.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # Only 1 red wire → DD can never have both slots red
+        red_dd = compute_probabilities.probability_of_red_wire_dd(
+            game, 0, 1, 0, 1,
+        )
+        self.assertAlmostEqual(red_dd, 0.0)
+
+        # But the single-slot red probability should still be > 0
+        red_single = compute_probabilities.probability_of_red_wire(
+            game, 0, 1, 1,
+        )
+        self.assertGreater(red_single, 0.0)
+
+    def test_dd_two_reds_possible_both_red(self) -> None:
+        """With 2 red wires and DD targeting 2 adjacent slots, P(both red) > 0%.
+
+        P0: [blue-5, blue-8]
+        P1: [red-3.5, red-4.5, blue-6] — two reds adjacent
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 4.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 4.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # 2 red wires exist → DD targeting P1 slots 0 and 1 could have
+        # both be red
+        red_dd = compute_probabilities.probability_of_red_wire_dd(
+            game, 0, 1, 0, 1,
+        )
+        self.assertGreater(red_dd, 0.0)
+
+    def test_dd_two_reds_constrained_to_one_max(self) -> None:
+        """DD on a player where at most 1 red fits → P(both red) = 0%.
+
+        P0: [blue-5, blue-8]
+        P1: [CUT-1, HIDDEN, CUT-3] — bounds [1.0, 3.0] for P1[1]
+        P2: [blue-9, blue-10]
+        P3: [blue-11, blue-12]
+
+        Only red-2.5 fits in [1.0, 3.0]. Red-7.5 doesn't.
+        P1 has only 1 hidden slot, so DD can't target 2 slots on P1.
+
+        Instead use P1 with 2 hidden slots but tight bounds that only
+        allow 1 red wire.
+
+        P1: [CUT-1, HIDDEN, HIDDEN, CUT-4]
+        Bounds for P1[1]: [1.0, 4.0], P1[2]: [1.0, 4.0].
+        Red-2.5 fits, Red-7.5 doesn't. Only 1 red can be placed.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 2.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 2.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 7.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        # Cut P1's first and last slots to constrain hidden slots
+        game.players[1].tile_stand.cut_wire_at(0)  # blue-1
+        game.players[1].tile_stand.cut_wire_at(3)  # blue-4
+        # P1[1] and P1[2] have bounds [1.0, 4.0].
+        # Only red-2.5 fits (red-7.5 = 7.5 > 4.0).
+        # So at most 1 of the 2 hidden slots can be red → P(both red) = 0.
+        red_dd = compute_probabilities.probability_of_red_wire_dd(
+            game, 0, 1, 1, 2,
+        )
+        self.assertAlmostEqual(red_dd, 0.0)
+
+    def test_dd_guaranteed_both_red(self) -> None:
+        """When both DD target slots are guaranteed red, P(both red) = 100%.
+
+        P0: [blue-1, blue-12]
+        P1: [red-3.5, red-4.5] — only 2 wires, both red
+        All other players cut.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 4.5)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 4.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        for i in range(2):
+            game.players[2].tile_stand.cut_wire_at(i)
+            game.players[3].tile_stand.cut_wire_at(i)
+
+        # Pool = [red-3.5, red-4.5] → P1 must have both reds
+        red_dd = compute_probabilities.probability_of_red_wire_dd(
+            game, 0, 1, 0, 1,
+        )
+        self.assertAlmostEqual(red_dd, 1.0)
+
+
+class TestRankedMoveRedProbability(unittest.TestCase):
+    """Tests for red_probability field in RankedMove via rank_all_moves."""
+
+    def test_ranked_moves_include_red_probability(self) -> None:
+        """Ranked moves include non-zero red_probability when red wires exist."""
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        game.players[1].tile_stand.cut_wire_at(0)  # Cut blue-3
+
+        moves = compute_probabilities.rank_all_moves(game, 0)
+        # At least one move should have nonzero red_probability
+        red_moves = [m for m in moves if m.red_probability > 0]
+        self.assertGreater(len(red_moves), 0)
+
+        # Solo cuts should have 0 red probability
+        solo_moves = [m for m in moves if m.action_type == "solo_cut"]
+        for m in solo_moves:
+            self.assertAlmostEqual(m.red_probability, 0.0)
+
+    def test_no_red_means_zero_red_in_moves(self) -> None:
+        """All moves have red_probability = 0 when no red wires exist."""
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+        ])
+        moves = compute_probabilities.rank_all_moves(game, 0)
+        for m in moves:
+            self.assertAlmostEqual(
+                m.red_probability, 0.0,
+                msg=f"No red wires → all moves should have 0% red, got {m}",
+            )
+
+    def test_ranked_move_str_shows_red(self) -> None:
+        """RankedMove.__str__ includes RED warning when red_probability > 0."""
+        move = compute_probabilities.RankedMove(
+            action_type="dual_cut",
+            target_player=1,
+            target_slot=2,
+            guessed_value=5,
+            probability=0.5,
+            red_probability=0.25,
+        )
+        output = str(move)
+        self.assertIn("RED", output)
+        self.assertIn("25.0%", output)
+
+    def test_ranked_move_str_no_red_when_zero(self) -> None:
+        """RankedMove.__str__ omits RED warning when red_probability is 0."""
+        move = compute_probabilities.RankedMove(
+            action_type="dual_cut",
+            target_player=1,
+            target_slot=2,
+            guessed_value=5,
+            probability=0.5,
+            red_probability=0.0,
+        )
+        output = str(move)
+        self.assertNotIn("RED", output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,12 +25,13 @@ The probability engine in @compute_probabilities.py computes the following from 
 - **Guaranteed actions**: "What solo cuts, dual cuts, or reveal-red actions are 100% guaranteed to succeed?"
 - **Best move ranking**: "What is the highest probability cut action I have?" — ranks all possible moves by probability descending.
 - **Double Detector probability**: Joint probability that at least one of two target slots matches the guessed value (computed from enumerated distributions, not naive independence).
+- **Red wire risk**: Per-slot probability that a target contains a red wire (instant game-over if cut). For Double Detector, computes joint probability that both target slots are red. Integrated into `RankedMove` as `red_probability` and displayed as a warning in terminal output.
 - **Equipment modifications**: The engine accepts the full game state including equipment, so future equipment that modifies cut rules can be integrated.
 
 ## Architecture
 
 - @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `InfoTokenPool`, `Marker`, `Equipment`, `WireConfig`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
-- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `guaranteed_actions`, `rank_all_moves`).
+- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
 

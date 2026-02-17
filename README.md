@@ -398,7 +398,9 @@ for move in moves[:5]:
 |----------|-------------|
 | `probability_of_dual_cut(game, observer, target_player, target_slot, value)` | Probability that a specific dual cut succeeds (0.0 to 1.0) |
 | `probability_of_double_detector(game, observer, target_player, slot1, slot2, value)` | Joint probability for Double Detector (not naive independence) |
+| `probability_of_red_wire(game, observer, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
+| `probability_of_red_wire_dd(game, observer, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
 | `guaranteed_actions(game, observer)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
 | `rank_all_moves(game, observer)` | Rank all possible moves by probability, sorted descending |
 
-**`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, and `probability`.
+**`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, `probability`, and `red_probability` (risk of hitting a red wire).
