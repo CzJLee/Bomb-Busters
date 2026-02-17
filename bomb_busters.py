@@ -433,18 +433,20 @@ def get_sort_value_bounds(
     lower = 0.0
     upper = 13.0
 
-    # Scan left for nearest known wire
+    # Scan left for nearest publicly visible wire (CUT or INFO_REVEALED).
+    # HIDDEN slots are skipped even if they contain a wire (simulation mode),
+    # because the observer cannot see hidden wires on other players' stands.
     for i in range(slot_index - 1, -1, -1):
-        wire = slots[i].wire
-        if wire is not None:
-            lower = wire.sort_value
+        slot = slots[i]
+        if slot.wire is not None and slot.state != SlotState.HIDDEN:
+            lower = slot.wire.sort_value
             break
 
-    # Scan right for nearest known wire
+    # Scan right for nearest publicly visible wire
     for i in range(slot_index + 1, len(slots)):
-        wire = slots[i].wire
-        if wire is not None:
-            upper = wire.sort_value
+        slot = slots[i]
+        if slot.wire is not None and slot.state != SlotState.HIDDEN:
+            upper = slot.wire.sort_value
             break
 
     return (lower, upper)

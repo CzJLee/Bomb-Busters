@@ -306,6 +306,62 @@ class TestSortValueBounds(unittest.TestCase):
         self.assertEqual(lower, 2.0)
         self.assertEqual(upper, 9.0)
 
+    def test_skips_hidden_wires_in_simulation_mode(self) -> None:
+        """Hidden slots with wires (simulation mode) must not be used as bounds.
+
+        In simulation mode, hidden slots have actual Wire objects, but
+        the observer cannot see them. Only CUT and INFO_REVEALED slots
+        should provide bounds.
+        """
+        slots = [
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                state=bomb_busters.SlotState.CUT,
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                state=bomb_busters.SlotState.HIDDEN,
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+                state=bomb_busters.SlotState.HIDDEN,  # target
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+                state=bomb_busters.SlotState.HIDDEN,
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+                state=bomb_busters.SlotState.CUT,
+            ),
+        ]
+        lower, upper = bomb_busters.get_sort_value_bounds(slots, 2)
+        # Should use CUT neighbors (2.0 and 9.0), NOT hidden neighbors (5.0 and 7.0)
+        self.assertEqual(lower, 2.0)
+        self.assertEqual(upper, 9.0)
+
+    def test_uses_info_revealed_as_bounds(self) -> None:
+        """INFO_REVEALED slots should be used as bounds (they are public)."""
+        slots = [
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+                state=bomb_busters.SlotState.INFO_REVEALED,
+                info_token=3,
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                state=bomb_busters.SlotState.HIDDEN,  # target
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0),
+                state=bomb_busters.SlotState.INFO_REVEALED,
+                info_token=8,
+            ),
+        ]
+        lower, upper = bomb_busters.get_sort_value_bounds(slots, 1)
+        self.assertEqual(lower, 3.0)
+        self.assertEqual(upper, 8.0)
+
 
 class TestCharacterCard(unittest.TestCase):
     """Tests for the bomb_busters.CharacterCard class."""

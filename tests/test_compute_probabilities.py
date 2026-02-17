@@ -159,6 +159,91 @@ class TestPositionConstraints(unittest.TestCase):
         self.assertEqual(c.lower_bound, 3.0)
         self.assertEqual(c.upper_bound, 7.0)
 
+    def test_hidden_neighbors_do_not_leak_bounds(self) -> None:
+        """Hidden slots with actual wires must not tighten constraints.
+
+        In simulation mode, hidden slots have Wire objects set. The
+        constraint solver must NOT use these as bounds — only CUT and
+        INFO_REVEALED slots are publicly visible.
+
+        P1 has [CUT-2, HIDDEN-5, HIDDEN-6, HIDDEN-8, CUT-10].
+        The constraint for HIDDEN-6 (slot 2) should be [2.0, 10.0]
+        (from the two CUT neighbors), NOT [5.0, 8.0] (from the adjacent
+        hidden wires 5 and 8 which the observer cannot see).
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+        ])
+        # Cut P1's first and last slots
+        game.players[1].tile_stand.cut_wire_at(0)  # blue-2
+        game.players[1].tile_stand.cut_wire_at(4)  # blue-10
+
+        constraints = compute_probabilities.compute_position_constraints(game, 0)
+        p1_constraints = {
+            c.slot_index: c for c in constraints if c.player_index == 1
+        }
+        # All 3 hidden slots should have bounds [2.0, 10.0]
+        for s_idx in (1, 2, 3):
+            self.assertIn(s_idx, p1_constraints)
+            c = p1_constraints[s_idx]
+            self.assertEqual(c.lower_bound, 2.0,
+                             f"Slot {s_idx} lower bound should be 2.0 (CUT), "
+                             f"not tighter from hidden neighbor")
+            self.assertEqual(c.upper_bound, 10.0,
+                             f"Slot {s_idx} upper bound should be 10.0 (CUT), "
+                             f"not tighter from hidden neighbor")
+
+    def test_no_false_100_percent_from_hidden_info(self) -> None:
+        """Verify probabilities are not artificially inflated by hidden wire info.
+
+        Creates a scenario where tight bounds from hidden wires would produce
+        a false 100% guarantee, but correct bounds allow multiple distributions.
+
+        P0 (observer): [blue-1, blue-12]
+        P1: [blue-3, blue-5, blue-9] — 3 hidden slots
+        P2: [blue-4, blue-7] — 2 hidden slots
+        P3: [blue-6, blue-11] — 2 hidden slots
+
+        With leaked info: P1's hidden constraints would be artificially tight
+        (each bounded by its neighbors). Without leak: all slots on P1 have
+        bounds [0.0, 13.0] since nothing is cut on P1.
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # P1 has 3 all-hidden slots with no cuts → bounds should be wide.
+        # Multiple wire values should be possible at each position.
+        key_p1_0 = (1, 0)
+        self.assertIn(key_p1_0, probs)
+        counter = probs[key_p1_0]
+        total = sum(counter.values())
+        self.assertGreater(total, 0)
+        # P1[0] should NOT be determined — multiple wires should be possible
+        for wire, count in counter.items():
+            self.assertLess(count, total,
+                            f"P1[0] should not be 100% any wire, "
+                            f"but {wire} has {count}/{total}")
+
 
 class TestSmallScenario(unittest.TestCase):
     """Hand-verifiable probability scenarios with small wire counts."""
