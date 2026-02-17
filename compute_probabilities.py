@@ -4,13 +4,25 @@ Computes the probability of success for different cut actions based on
 the observable game state from a specific player's perspective. Supports
 deduction from sort-order constraints, info tokens, validation tokens,
 and turn history.
+
+Architecture:
+    SolverContext + _solve_backward() build a reusable memo once per
+    game-state + observer. Forward-pass functions then compute specific
+    probabilities (dual cut, Double Detector, red wire risk, etc.)
+    instantly from the shared memo.
 """
 
 from __future__ import annotations
 
 import collections
 import dataclasses
+
 import bomb_busters
+
+try:
+    import tqdm as _tqdm_module
+except ImportError:  # pragma: no cover
+    _tqdm_module = None  # type: ignore[assignment]
 
 _C = bomb_busters._Colors
 
@@ -296,27 +308,67 @@ def compute_position_constraints(
 
 
 # =============================================================================
-# Enumeration Engine (Backtracking Solver)
+# Solver Context & Memo
 # =============================================================================
+
+# A memo entry stores (total_ways, slot_counts, transitions):
+#   total_ways: int — total valid distributions for players[pli:]
+#   slot_counts: dict[int, Counter[Wire, int]] — for each position
+#       index within this player, count of (seq × sub_ways) per wire
+#   transitions: dict[tuple[int,...], int] — for each new_remaining
+#       pool state, # of valid sequences that produce that state
+MemoEntry = tuple[
+    int,
+    dict[int, collections.Counter[bomb_busters.Wire]],
+    dict[tuple[int, ...], int],
+]
+
+# Complete memo: maps (player_level_index, remaining_pool_tuple) -> MemoEntry
+MemoDict = dict[tuple[int, tuple[int, ...]], MemoEntry]
+
+
+@dataclasses.dataclass
+class SolverContext:
+    """Immutable context for the constraint solver.
+
+    Built once per game-state + observer combination via _setup_solver().
+    Reusable across multiple forward passes (dual cut, Double Detector,
+    Triple Detector, etc.) when paired with a MemoDict from
+    _solve_backward().
+
+    Attributes:
+        positions_by_player: Position constraints grouped by player index,
+            sorted by slot_index within each player.
+        player_order: Player indices ordered for solver processing
+            (widest average bounds first for optimal memoization).
+        distinct_wires: Sorted list of unique Wire objects in the
+            unknown pool.
+        initial_pool: Tuple of counts for each distinct wire type.
+        must_have: Dict mapping player_index to set of gameplay values
+            they must have (from failed dual cut deductions).
+    """
+    positions_by_player: dict[int, list[PositionConstraint]]
+    player_order: list[int]
+    distinct_wires: list[bomb_busters.Wire]
+    initial_pool: tuple[int, ...]
+    must_have: dict[int, set[int | str]]
+
 
 def _setup_solver(
     game: bomb_busters.GameState,
     observer_index: int,
-) -> tuple[
-    dict[int, list[PositionConstraint]],
-    list[int],
-    list[bomb_busters.Wire],
-    dict[bomb_busters.Wire, int],
-    tuple[int, ...],
-    dict[int, set[int | str]],
-] | None:
-    """Set up common data structures for the constraint solver.
+) -> SolverContext | None:
+    """Set up solver context from game state.
 
-    Returns None if there are no hidden positions to solve.
+    Extracts known information, computes the unknown pool, derives
+    position constraints, and orders players for optimal solving.
+
+    Args:
+        game: The current game state.
+        observer_index: The observing player's index.
 
     Returns:
-        Tuple of (positions_by_player, player_order, distinct_wires,
-        pool_counter, initial_pool_tuple, must_have), or None.
+        A SolverContext, or None if there are no hidden positions to solve.
     """
     known = extract_known_info(game, observer_index)
     unknown_pool = compute_unknown_pool(known, game)
@@ -349,114 +401,122 @@ def _setup_solver(
     distinct_wires = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     initial_pool = tuple(pool_counter[w] for w in distinct_wires)
 
-    return (
-        positions_by_player,
-        player_order,
-        distinct_wires,
-        pool_counter,
-        initial_pool,
-        known.player_must_have,
+    return SolverContext(
+        positions_by_player=positions_by_player,
+        player_order=player_order,
+        distinct_wires=distinct_wires,
+        initial_pool=initial_pool,
+        must_have=known.player_must_have,
     )
 
 
-def _check_must_have(
-    assignment: dict[tuple[int, int], bomb_busters.Wire],
-    positions_by_player: dict[int, list[PositionConstraint]],
-    must_have: dict[int, set[int | str]],
-) -> bool:
-    """Verify that a complete assignment satisfies must-have constraints.
+# =============================================================================
+# Backward Solve (Memo Builder)
+# =============================================================================
+
+def _count_root_compositions(ctx: SolverContext) -> int:
+    """Count wire-type compositions for the first player level.
+
+    Fast dry-run of the composition enumeration for the root player
+    without recursing into downstream player levels. Used to estimate
+    total work for the progress bar.
 
     Args:
-        assignment: Mapping from (player_index, slot_index) to Wire.
-        positions_by_player: Position constraints grouped by player.
-        must_have: Required values per player.
+        ctx: Solver context with constraints and pool data.
 
     Returns:
-        True if all must-have constraints are satisfied.
+        Number of valid compositions at pli=0.
     """
-    if not must_have:
-        return True
+    if not ctx.player_order:
+        return 0
 
-    for player_idx, required_values in must_have.items():
-        if player_idx not in positions_by_player:
-            # Skip the observer or players with no hidden slots —
-            # their hands are already known and not part of the assignment.
-            continue
-        player_values: set[int | str] = set()
-        for (p_idx, _s_idx), wire in assignment.items():
-            if p_idx == player_idx:
-                player_values.add(wire.gameplay_value)
-        if not required_values.issubset(player_values):
-            return False
-    return True
+    p = ctx.player_order[0]
+    positions = ctx.positions_by_player[p]
+    num_pos = len(positions)
+    distinct_wires = ctx.distinct_wires
+    num_types = len(distinct_wires)
+    rem = list(ctx.initial_pool)
+
+    max_run: list[list[int]] = []
+    for d, w in enumerate(distinct_wires):
+        runs = [0] * (num_pos + 1)
+        for pi in range(num_pos - 1, -1, -1):
+            if positions[pi].wire_fits(w):
+                runs[pi] = runs[pi + 1] + 1
+            else:
+                runs[pi] = 0
+        max_run.append(runs)
+
+    count = 0
+
+    def _compose(d: int, pi: int) -> None:
+        nonlocal count
+        if pi == num_pos:
+            count += 1
+            return
+        if d == num_types:
+            return
+        run_limit = max_run[d][pi]
+        max_k = min(rem[d], num_pos - pi, run_limit)
+        saved = rem[d]
+        for k in range(max_k + 1):
+            rem[d] = saved - k
+            _compose(d + 1, pi + k)
+        rem[d] = saved
+
+    _compose(0, 0)
+    return count
 
 
-def compute_position_probabilities(
-    game: bomb_busters.GameState, observer_index: int
-) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
-    """Compute the probability distribution for each hidden slot.
+def _solve_backward(
+    ctx: SolverContext,
+    show_progress: bool = False,
+) -> MemoDict:
+    """Build the complete backward-solve memo.
 
-    For each hidden position on other players' stands, counts how many
-    valid wire distributions place each possible wire at that position.
+    Uses composition-based enumeration: for each player, decides how many
+    copies of each wire type to place rather than choosing per-position.
+    Since positions are ascending and wire types are sorted, the assignment
+    is deterministic from the composition. This reduces branching
+    dramatically compared to per-position backtracking.
 
-    Uses a two-phase DP approach for efficiency:
-    1. Memoized total_ways: counts valid distributions for players[pli:]
-       given a remaining pool state, with memoization at player boundaries.
-    2. Forward pass: iterates through players, enumerating per-player
-       sequences weighted by downstream completion counts.
+    Memoized at player boundaries by (player_level_index, remaining_pool).
 
     Args:
-        game: The current game state.
-        observer_index: The observing player's index.
+        ctx: Solver context with constraints and pool data.
+        show_progress: If True, display a tqdm progress bar. Uses
+            root-level compositions as the progress metric — each
+            composition for the first player represents a roughly
+            comparable chunk of downstream work.
 
     Returns:
-        Dict mapping (player_index, slot_index) to a Counter of
-        {Wire: count_of_valid_distributions}. The probability of a wire
-        at a position is count / sum(counter.values()).
+        Complete memo dict mapping (pli, remaining) -> MemoEntry.
     """
-    setup = _setup_solver(game, observer_index)
-    if setup is None:
-        return {}
+    memo: MemoDict = {}
+    num_players = len(ctx.player_order)
+    distinct_wires = ctx.distinct_wires
+    positions_by_player = ctx.positions_by_player
+    player_order = ctx.player_order
+    must_have = ctx.must_have
 
-    (
-        positions_by_player,
-        player_order,
-        distinct_wires,
-        pool_counter,
-        initial_pool,
-        must_have,
-    ) = setup
-    num_players = len(player_order)
+    pbar = None
+    if show_progress and _tqdm_module is not None:
+        total_compositions = _count_root_compositions(ctx)
+        pbar = _tqdm_module.tqdm(
+            total=total_compositions,
+            desc="Solving",
+            unit=" compositions",
+            dynamic_ncols=True,
+        )
 
-    # Memo entry: (total_ways, slot_counts, transitions)
-    #   total_ways: int — total valid distributions for players[pli:]
-    #   slot_counts: dict[int, Counter[Wire, int]] — for each position
-    #       index within this player, count of (seq × sub_ways) per wire
-    #   transitions: dict[tuple[int,...], int] — for each new_remaining
-    #       pool state, # of valid sequences that produce that state
-    _MemoEntry = tuple[
-        int,
-        dict[int, collections.Counter[bomb_busters.Wire]],
-        dict[tuple[int, ...], int],
-    ]
-    memo: dict[tuple[int, tuple[int, ...]], _MemoEntry] = {}
-
-    def _solve(pli: int, remaining: tuple[int, ...]) -> _MemoEntry:
-        """Compute and cache total_ways, slot_counts, and transitions.
-
-        Uses composition-based enumeration: instead of deciding which wire
-        goes at each position, decides how many copies of each wire type
-        to use. Since positions are ascending and wire types are sorted,
-        the assignment is deterministic from the composition. This reduces
-        branching dramatically compared to per-position backtracking.
-        """
+    def _solve(pli: int, remaining: tuple[int, ...]) -> MemoEntry:
         key = (pli, remaining)
         cached = memo.get(key)
         if cached is not None:
             return cached
 
         if pli == num_players:
-            entry: _MemoEntry = (1, {}, {})
+            entry: MemoEntry = (1, {}, {})
             memo[key] = entry
             return entry
 
@@ -489,20 +549,10 @@ def compute_position_probabilities(
             pi: int,
             seen: set[int | str],
         ) -> None:
-            """Enumerate wire-type compositions via type-by-type DFS.
-
-            Instead of choosing a wire for each position, chooses how
-            many copies of each wire type to use. Since positions are
-            ascending and types are sorted, the assignment is deterministic:
-            the first k positions get k copies of the current type.
-
-            Args:
-                d: Current wire type index (0..num_types-1).
-                pi: Next position to fill (0..num_pos).
-                seen: Gameplay values seen so far (for must-have check).
-            """
             if pi == num_pos:
                 # All positions filled. Skip remaining wire types.
+                if pbar is not None and pli == 0:
+                    pbar.update(1)
                 if required and not required.issubset(seen):
                     return
                 new_remaining = tuple(rem)
@@ -554,19 +604,75 @@ def compute_position_probabilities(
         memo[key] = entry
         return entry
 
-    # Seed the memo by calling _solve from the root.
-    root_total = _solve(0, initial_pool)[0]
-    if root_total == 0:
-        return {}
+    _solve(0, ctx.initial_pool)
 
-    # Forward pass: iterate through players using memoized data.
-    # No backtracking needed — just dict lookups and multiplications.
+    if pbar is not None:
+        pbar.close()
+
+    return memo
+
+
+# =============================================================================
+# Public Solver API
+# =============================================================================
+
+def build_solver(
+    game: bomb_busters.GameState,
+    observer_index: int,
+    show_progress: bool = True,
+) -> tuple[SolverContext, MemoDict] | None:
+    """Build solver context and memo for a game state + observer.
+
+    Call this once, then pass ctx/memo to any number of forward-pass
+    functions (compute_position_probabilities, probability_of_double_detector,
+    probability_of_red_wire_dd, etc.) for instant results.
+
+    Args:
+        game: The current game state.
+        observer_index: The observing player's index.
+        show_progress: If True (default), display a tqdm progress bar
+            during the backward solve.
+
+    Returns:
+        A (SolverContext, MemoDict) tuple, or None if there are no
+        hidden positions to solve.
+    """
+    ctx = _setup_solver(game, observer_index)
+    if ctx is None:
+        return None
+    memo = _solve_backward(ctx, show_progress=show_progress)
+    return ctx, memo
+
+
+# =============================================================================
+# Forward Passes
+# =============================================================================
+
+def _forward_pass_positions(
+    ctx: SolverContext,
+    memo: MemoDict,
+) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
+    """Compute per-position wire probability distributions from a prebuilt memo.
+
+    Iterates through players using memoized data, accumulating weighted
+    per-position wire counts. No backtracking needed — just dict lookups
+    and multiplications.
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo from _solve_backward().
+
+    Returns:
+        Dict mapping (player_index, slot_index) to a Counter of
+        {Wire: count_of_valid_distributions}.
+    """
+    num_players = len(ctx.player_order)
     result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
-    frontier: dict[tuple[int, ...], int] = {initial_pool: 1}
+    frontier: dict[tuple[int, ...], int] = {ctx.initial_pool: 1}
 
     for pli in range(num_players):
-        p = player_order[pli]
-        positions = positions_by_player[p]
+        p = ctx.player_order[pli]
+        positions = ctx.positions_by_player[p]
         next_frontier: dict[tuple[int, ...], int] = {}
 
         for remaining, fwd_weight in frontier.items():
@@ -596,9 +702,291 @@ def compute_position_probabilities(
     return result
 
 
+def _find_target_positions(
+    ctx: SolverContext,
+    target_player_index: int,
+    target_slot_indices: list[int],
+) -> tuple[int, list[int]] | None:
+    """Find a target player's level index and position indices in the solver.
+
+    Args:
+        ctx: Solver context.
+        target_player_index: The player index to find.
+        target_slot_indices: Slot indices to locate within that player's
+            position constraints.
+
+    Returns:
+        A tuple of (player_level_index, position_indices), or None if
+        the target player is not in the solver (e.g., the observer).
+    """
+    for pli, p in enumerate(ctx.player_order):
+        if p == target_player_index:
+            pos_indices: list[int] = []
+            for pi, pc in enumerate(ctx.positions_by_player[p]):
+                if pc.slot_index in target_slot_indices:
+                    pos_indices.append(pi)
+            return pli, pos_indices
+    return None
+
+
+def _advance_frontier(
+    ctx: SolverContext,
+    memo: MemoDict,
+    stop_pli: int,
+) -> dict[tuple[int, ...], int]:
+    """Advance the frontier from the root to a specific player level.
+
+    Uses memo transitions to propagate forward weights without any
+    backtracking.
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo.
+        stop_pli: Player level index to stop at (exclusive).
+
+    Returns:
+        Frontier dict mapping remaining_pool_tuple -> forward_weight
+        at the stop_pli boundary.
+    """
+    frontier: dict[tuple[int, ...], int] = {ctx.initial_pool: 1}
+    for pli in range(stop_pli):
+        next_frontier: dict[tuple[int, ...], int] = {}
+        for remaining, fwd_weight in frontier.items():
+            transitions = memo[(pli, remaining)][2]
+            for new_rem, seq_count in transitions.items():
+                next_frontier[new_rem] = (
+                    next_frontier.get(new_rem, 0)
+                    + fwd_weight * seq_count
+                )
+        frontier = next_frontier
+    return frontier
+
+
+def _enumerate_target_player(
+    ctx: SolverContext,
+    memo: MemoDict,
+    target_pli: int,
+    frontier: dict[tuple[int, ...], int],
+    check_fn: collections.abc.Callable[[list[bomb_busters.Wire], int], bool],
+) -> tuple[int, int]:
+    """Enumerate a target player's wire sequences and check a condition.
+
+    Advances through the target player's positions using per-position
+    backtracking, checking a condition on each complete sequence. Uses
+    the memo for downstream total_ways (players after the target).
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo.
+        target_pli: The target player's level index in player_order.
+        frontier: Frontier at the target player boundary.
+        check_fn: Called with (sequence, weight) for each valid complete
+            sequence. Returns True if the sequence matches the desired
+            condition (e.g., DD match, both-red). The weight accounts
+            for both the forward weight and downstream completions.
+
+    Returns:
+        A tuple of (total_count, match_count) where total_count is the
+        sum of weights for all valid sequences, and match_count is the
+        sum of weights where check_fn returned True.
+    """
+    p = ctx.player_order[target_pli]
+    positions = ctx.positions_by_player[p]
+    distinct_wires = ctx.distinct_wires
+    required = ctx.must_have.get(p, set())
+
+    total_count = 0
+    match_count = 0
+
+    def _bt(
+        pi: int, min_sv: float,
+        seq: list[bomb_busters.Wire], seen: set[int | str],
+        rem: list[int], fwd_weight: int,
+    ) -> None:
+        nonlocal total_count, match_count
+        if pi == len(positions):
+            if required and not required.issubset(seen):
+                return
+            sub_ways = memo[(target_pli + 1, tuple(rem))][0]
+            if sub_ways == 0:
+                return
+            weight = fwd_weight * sub_ways
+            total_count += weight
+            if check_fn(seq, weight):
+                match_count += weight
+            return
+
+        pc = positions[pi]
+        lo = max(pc.lower_bound, min_sv)
+        for i, w in enumerate(distinct_wires):
+            if rem[i] <= 0:
+                continue
+            if w.sort_value < lo:
+                continue
+            if w.sort_value > pc.upper_bound:
+                break
+            rem[i] -= 1
+            seq.append(w)
+            new_seen = (
+                seen | {w.gameplay_value} if required else seen
+            )
+            _bt(pi + 1, w.sort_value, seq, new_seen, rem, fwd_weight)
+            seq.pop()
+            rem[i] += 1
+
+    for remaining, fwd_weight in frontier.items():
+        _bt(0, 0.0, [], set(), list(remaining), fwd_weight)
+
+    return total_count, match_count
+
+
+def _forward_pass_dd(
+    ctx: SolverContext,
+    memo: MemoDict,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+    guessed_value: int | str,
+) -> float:
+    """Compute Double Detector probability from a prebuilt memo.
+
+    Calculates P(at least one of the two target slots has the guessed value)
+    using joint enumeration through the target player's sequences.
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo from _solve_backward().
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+        guessed_value: The value being guessed.
+
+    Returns:
+        Probability of success as a float between 0.0 and 1.0.
+    """
+    result = _find_target_positions(
+        ctx, target_player_index, [slot_index_1, slot_index_2],
+    )
+    if result is None:
+        return 0.0
+    target_pli, target_pos_indices = result
+
+    # Check that root has valid distributions
+    root_entry = memo.get((0, ctx.initial_pool))
+    if root_entry is None or root_entry[0] == 0:
+        return 0.0
+
+    frontier = _advance_frontier(ctx, memo, target_pli)
+
+    def check_dd(seq: list[bomb_busters.Wire], weight: int) -> bool:
+        return any(
+            seq[tpi].gameplay_value == guessed_value
+            for tpi in target_pos_indices
+        )
+
+    total_count, match_count = _enumerate_target_player(
+        ctx, memo, target_pli, frontier, check_dd,
+    )
+
+    if total_count == 0:
+        return 0.0
+    return match_count / total_count
+
+
+def _forward_pass_red_dd(
+    ctx: SolverContext,
+    memo: MemoDict,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+) -> float:
+    """Compute joint red-wire probability for Double Detector from a prebuilt memo.
+
+    Calculates P(both target slots are red wires) using joint enumeration.
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo from _solve_backward().
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+
+    Returns:
+        Probability that both slots are red wires (0.0 to 1.0).
+    """
+    result = _find_target_positions(
+        ctx, target_player_index, [slot_index_1, slot_index_2],
+    )
+    if result is None or len(result[1]) != 2:
+        return 0.0
+    target_pli, target_pos_indices = result
+
+    # Check that root has valid distributions
+    root_entry = memo.get((0, ctx.initial_pool))
+    if root_entry is None or root_entry[0] == 0:
+        return 0.0
+
+    frontier = _advance_frontier(ctx, memo, target_pli)
+
+    def check_both_red(seq: list[bomb_busters.Wire], weight: int) -> bool:
+        return all(
+            seq[tpi].color == bomb_busters.WireColor.RED
+            for tpi in target_pos_indices
+        )
+
+    total_count, match_count = _enumerate_target_player(
+        ctx, memo, target_pli, frontier, check_both_red,
+    )
+
+    if total_count == 0:
+        return 0.0
+    return match_count / total_count
+
+
 # =============================================================================
 # High-Level Probability API
 # =============================================================================
+
+def compute_position_probabilities(
+    game: bomb_busters.GameState,
+    observer_index: int,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
+) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
+    """Compute the probability distribution for each hidden slot.
+
+    For each hidden position on other players' stands, counts how many
+    valid wire distributions place each possible wire at that position.
+
+    When ctx and memo are provided, skips the expensive backward solve
+    and runs only the fast forward pass.
+
+    Args:
+        game: The current game state.
+        observer_index: The observing player's index.
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show a tqdm
+            progress bar.
+
+    Returns:
+        Dict mapping (player_index, slot_index) to a Counter of
+        {Wire: count_of_valid_distributions}. The probability of a wire
+        at a position is count / sum(counter.values()).
+    """
+    if ctx is None or memo is None:
+        solver = build_solver(game, observer_index, show_progress=show_progress)
+        if solver is None:
+            return {}
+        ctx, memo = solver
+
+    root_entry = memo.get((0, ctx.initial_pool))
+    if root_entry is None or root_entry[0] == 0:
+        return {}
+
+    return _forward_pass_positions(ctx, memo)
+
 
 def probability_of_dual_cut(
     game: bomb_busters.GameState,
@@ -606,6 +994,9 @@ def probability_of_dual_cut(
     target_player_index: int,
     target_slot_index: int,
     guessed_value: int | str,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
 ) -> float:
     """Compute the probability that a dual cut succeeds.
 
@@ -618,11 +1009,16 @@ def probability_of_dual_cut(
         target_player_index: Index of the target player.
         target_slot_index: Slot index on the target's stand.
         guessed_value: The value being guessed (int 1-12 or 'YELLOW').
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
 
     Returns:
         Probability of success as a float between 0.0 and 1.0.
     """
-    probs = compute_position_probabilities(game, observer_index)
+    probs = compute_position_probabilities(
+        game, observer_index, ctx=ctx, memo=memo, show_progress=show_progress,
+    )
     key = (target_player_index, target_slot_index)
     if key not in probs:
         return 0.0
@@ -646,6 +1042,9 @@ def probability_of_double_detector(
     slot_index_1: int,
     slot_index_2: int,
     guessed_value: int | str,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
 ) -> float:
     """Compute the probability that a Double Detector succeeds.
 
@@ -654,10 +1053,8 @@ def probability_of_double_detector(
     P(A) + P(B) - P(A)*P(B) formula (since slots share the same pool and
     are not independent).
 
-    Uses the same memoized DP approach as compute_position_probabilities.
-    Builds a forward frontier to the target player, then enumerates that
-    player's sequences to check the joint condition weighted by downstream
-    completion counts.
+    When ctx and memo are provided, skips the expensive backward solve
+    and runs only the fast forward pass through the target player.
 
     Args:
         game: The current game state.
@@ -666,189 +1063,23 @@ def probability_of_double_detector(
         slot_index_1: First slot index on the target's stand.
         slot_index_2: Second slot index on the target's stand.
         guessed_value: The value being guessed (int 1-12 only, not YELLOW).
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
 
     Returns:
         Probability of success as a float between 0.0 and 1.0.
     """
-    setup = _setup_solver(game, observer_index)
-    if setup is None:
-        return 0.0
+    if ctx is None or memo is None:
+        solver = build_solver(game, observer_index, show_progress=show_progress)
+        if solver is None:
+            return 0.0
+        ctx, memo = solver
 
-    (
-        positions_by_player,
-        player_order,
-        distinct_wires,
-        _pool_counter,
-        initial_pool,
-        must_have,
-    ) = setup
-    num_players = len(player_order)
-
-    # Find the target player's index in player_order and
-    # which position indices correspond to the two target slots.
-    target_pli: int | None = None
-    target_pos_indices: list[int] = []
-    for pli, p in enumerate(player_order):
-        if p == target_player_index:
-            target_pli = pli
-            for pi, pc in enumerate(positions_by_player[p]):
-                if pc.slot_index in (slot_index_1, slot_index_2):
-                    target_pos_indices.append(pi)
-            break
-
-    if target_pli is None:
-        return 0.0
-
-    # Build memo using the same _solve structure.
-    memo: dict[
-        tuple[int, tuple[int, ...]],
-        tuple[int, dict[int, collections.Counter[bomb_busters.Wire]],
-              dict[tuple[int, ...], int]],
-    ] = {}
-
-    def _solve(
-        pli: int, remaining: tuple[int, ...],
-    ) -> tuple[int, dict, dict]:
-        key = (pli, remaining)
-        cached = memo.get(key)
-        if cached is not None:
-            return cached
-
-        if pli == num_players:
-            entry = (1, {}, {})
-            memo[key] = entry
-            return entry
-
-        p = player_order[pli]
-        positions = positions_by_player[p]
-        required = must_have.get(p, set())
-        rem = list(remaining)
-        total = [0]
-        slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
-        transitions: dict[tuple[int, ...], int] = {}
-
-        def _bt(
-            pi: int, min_sv: float,
-            seq: list[bomb_busters.Wire], seen: set[int | str],
-        ) -> None:
-            if pi == len(positions):
-                if required and not required.issubset(seen):
-                    return
-                new_remaining = tuple(rem)
-                sub_total = _solve(pli + 1, new_remaining)[0]
-                if sub_total == 0:
-                    return
-                total[0] += sub_total
-                for idx, wire in enumerate(seq):
-                    counter = slot_counts.get(idx)
-                    if counter is None:
-                        counter = collections.Counter()
-                        slot_counts[idx] = counter
-                    counter[wire] += sub_total
-                transitions[new_remaining] = (
-                    transitions.get(new_remaining, 0) + 1
-                )
-                return
-
-            pc = positions[pi]
-            lo = max(pc.lower_bound, min_sv)
-            for i, w in enumerate(distinct_wires):
-                if rem[i] <= 0:
-                    continue
-                if w.sort_value < lo:
-                    continue
-                if w.sort_value > pc.upper_bound:
-                    break
-                rem[i] -= 1
-                seq.append(w)
-                new_seen = (
-                    seen | {w.gameplay_value} if required else seen
-                )
-                _bt(pi + 1, w.sort_value, seq, new_seen)
-                seq.pop()
-                rem[i] += 1
-
-        _bt(0, 0.0, [], set())
-        entry = (total[0], slot_counts, transitions)
-        memo[key] = entry
-        return entry
-
-    root_total = _solve(0, initial_pool)[0]
-    if root_total == 0:
-        return 0.0
-
-    # Forward pass: advance frontier to the target player using
-    # memoized transitions, then enumerate target player's sequences
-    # to compute the DD match count.
-    frontier: dict[tuple[int, ...], int] = {initial_pool: 1}
-
-    for pli in range(num_players):
-        if pli == target_pli:
-            break
-        next_frontier: dict[tuple[int, ...], int] = {}
-        for remaining, fwd_weight in frontier.items():
-            transitions = memo[(pli, remaining)][2]
-            for new_rem, seq_count in transitions.items():
-                next_frontier[new_rem] = (
-                    next_frontier.get(new_rem, 0)
-                    + fwd_weight * seq_count
-                )
-        frontier = next_frontier
-
-    # At target_pli: enumerate target player's sequences, checking
-    # whether either target slot matches the guessed value.
-    total_count = 0
-    match_count = 0
-
-    p = player_order[target_pli]
-    positions = positions_by_player[p]
-    required = must_have.get(p, set())
-
-    for remaining, fwd_weight in frontier.items():
-        rem = list(remaining)
-
-        def _bt_dd(
-            pi: int, min_sv: float,
-            seq: list[bomb_busters.Wire], seen: set[int | str],
-        ) -> None:
-            nonlocal total_count, match_count
-            if pi == len(positions):
-                if required and not required.issubset(seen):
-                    return
-                sub_ways = _solve(target_pli + 1, tuple(rem))[0]
-                if sub_ways == 0:
-                    return
-                weight = fwd_weight * sub_ways
-                total_count += weight
-                for tpi in target_pos_indices:
-                    if seq[tpi].gameplay_value == guessed_value:
-                        match_count += weight
-                        break
-                return
-
-            pc = positions[pi]
-            lo = max(pc.lower_bound, min_sv)
-            for i, w in enumerate(distinct_wires):
-                if rem[i] <= 0:
-                    continue
-                if w.sort_value < lo:
-                    continue
-                if w.sort_value > pc.upper_bound:
-                    break
-                rem[i] -= 1
-                seq.append(w)
-                new_seen = (
-                    seen | {w.gameplay_value} if required else seen
-                )
-                _bt_dd(pi + 1, w.sort_value, seq, new_seen)
-                seq.pop()
-                rem[i] += 1
-
-        _bt_dd(0, 0.0, [], set())
-
-    if total_count == 0:
-        return 0.0
-    return match_count / total_count
+    return _forward_pass_dd(
+        ctx, memo, target_player_index,
+        slot_index_1, slot_index_2, guessed_value,
+    )
 
 
 def probability_of_red_wire(
@@ -899,6 +1130,9 @@ def probability_of_red_wire_dd(
     target_player_index: int,
     slot_index_1: int,
     slot_index_2: int,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
 ) -> float:
     """Compute the probability that a Double Detector fails by hitting red.
 
@@ -909,194 +1143,32 @@ def probability_of_red_wire_dd(
     This computes P(both slots are red) using joint enumeration from the
     constraint solver, not naive independence assumptions.
 
+    When ctx and memo are provided, skips the expensive backward solve
+    and runs only the fast forward pass.
+
     Args:
         game: The current game state.
         observer_index: The observing player's index.
         target_player_index: Index of the target player.
         slot_index_1: First slot index on the target's stand.
         slot_index_2: Second slot index on the target's stand.
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
 
     Returns:
         Probability that both slots are red wires (0.0 to 1.0).
     """
-    setup = _setup_solver(game, observer_index)
-    if setup is None:
-        return 0.0
+    if ctx is None or memo is None:
+        solver = build_solver(game, observer_index, show_progress=show_progress)
+        if solver is None:
+            return 0.0
+        ctx, memo = solver
 
-    (
-        positions_by_player,
-        player_order,
-        distinct_wires,
-        _pool_counter,
-        initial_pool,
-        must_have,
-    ) = setup
-    num_players = len(player_order)
-
-    # Find the target player's index in player_order and
-    # which position indices correspond to the two target slots.
-    target_pli: int | None = None
-    target_pos_indices: list[int] = []
-    for pli, p in enumerate(player_order):
-        if p == target_player_index:
-            target_pli = pli
-            for pi, pc in enumerate(positions_by_player[p]):
-                if pc.slot_index in (slot_index_1, slot_index_2):
-                    target_pos_indices.append(pi)
-            break
-
-    if target_pli is None or len(target_pos_indices) != 2:
-        return 0.0
-
-    # Build memo using the same _solve structure as probability_of_double_detector.
-    memo: dict[
-        tuple[int, tuple[int, ...]],
-        tuple[int, dict[int, collections.Counter[bomb_busters.Wire]],
-              dict[tuple[int, ...], int]],
-    ] = {}
-
-    def _solve(
-        pli: int, remaining: tuple[int, ...],
-    ) -> tuple[int, dict, dict]:
-        key = (pli, remaining)
-        cached = memo.get(key)
-        if cached is not None:
-            return cached
-
-        if pli == num_players:
-            entry = (1, {}, {})
-            memo[key] = entry
-            return entry
-
-        p = player_order[pli]
-        positions = positions_by_player[p]
-        required = must_have.get(p, set())
-        rem = list(remaining)
-        total = [0]
-        slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
-        transitions: dict[tuple[int, ...], int] = {}
-
-        def _bt(
-            pi: int, min_sv: float,
-            seq: list[bomb_busters.Wire], seen: set[int | str],
-        ) -> None:
-            if pi == len(positions):
-                if required and not required.issubset(seen):
-                    return
-                new_remaining = tuple(rem)
-                sub_total = _solve(pli + 1, new_remaining)[0]
-                if sub_total == 0:
-                    return
-                total[0] += sub_total
-                for idx, wire in enumerate(seq):
-                    counter = slot_counts.get(idx)
-                    if counter is None:
-                        counter = collections.Counter()
-                        slot_counts[idx] = counter
-                    counter[wire] += sub_total
-                transitions[new_remaining] = (
-                    transitions.get(new_remaining, 0) + 1
-                )
-                return
-
-            pc = positions[pi]
-            lo = max(pc.lower_bound, min_sv)
-            for i, w in enumerate(distinct_wires):
-                if rem[i] <= 0:
-                    continue
-                if w.sort_value < lo:
-                    continue
-                if w.sort_value > pc.upper_bound:
-                    break
-                rem[i] -= 1
-                seq.append(w)
-                new_seen = (
-                    seen | {w.gameplay_value} if required else seen
-                )
-                _bt(pi + 1, w.sort_value, seq, new_seen)
-                seq.pop()
-                rem[i] += 1
-
-        _bt(0, 0.0, [], set())
-        entry = (total[0], slot_counts, transitions)
-        memo[key] = entry
-        return entry
-
-    root_total = _solve(0, initial_pool)[0]
-    if root_total == 0:
-        return 0.0
-
-    # Forward pass: advance frontier to the target player.
-    frontier: dict[tuple[int, ...], int] = {initial_pool: 1}
-
-    for pli in range(num_players):
-        if pli == target_pli:
-            break
-        next_frontier: dict[tuple[int, ...], int] = {}
-        for remaining, fwd_weight in frontier.items():
-            transitions = memo[(pli, remaining)][2]
-            for new_rem, seq_count in transitions.items():
-                next_frontier[new_rem] = (
-                    next_frontier.get(new_rem, 0)
-                    + fwd_weight * seq_count
-                )
-        frontier = next_frontier
-
-    # At target_pli: enumerate target player's sequences, checking
-    # whether both target slots are red.
-    total_count = 0
-    both_red_count = 0
-
-    p = player_order[target_pli]
-    positions = positions_by_player[p]
-    required = must_have.get(p, set())
-
-    for remaining, fwd_weight in frontier.items():
-        rem = list(remaining)
-
-        def _bt_red(
-            pi: int, min_sv: float,
-            seq: list[bomb_busters.Wire], seen: set[int | str],
-        ) -> None:
-            nonlocal total_count, both_red_count
-            if pi == len(positions):
-                if required and not required.issubset(seen):
-                    return
-                sub_ways = _solve(target_pli + 1, tuple(rem))[0]
-                if sub_ways == 0:
-                    return
-                weight = fwd_weight * sub_ways
-                total_count += weight
-                if all(
-                    seq[tpi].color == bomb_busters.WireColor.RED
-                    for tpi in target_pos_indices
-                ):
-                    both_red_count += weight
-                return
-
-            pc = positions[pi]
-            lo = max(pc.lower_bound, min_sv)
-            for i, w in enumerate(distinct_wires):
-                if rem[i] <= 0:
-                    continue
-                if w.sort_value < lo:
-                    continue
-                if w.sort_value > pc.upper_bound:
-                    break
-                rem[i] -= 1
-                seq.append(w)
-                new_seen = (
-                    seen | {w.gameplay_value} if required else seen
-                )
-                _bt_red(pi + 1, w.sort_value, seq, new_seen)
-                seq.pop()
-                rem[i] += 1
-
-        _bt_red(0, 0.0, [], set())
-
-    if total_count == 0:
-        return 0.0
-    return both_red_count / total_count
+    return _forward_pass_red_dd(
+        ctx, memo, target_player_index,
+        slot_index_1, slot_index_2,
+    )
 
 
 def guaranteed_actions(
@@ -1347,21 +1419,44 @@ def _prob_colored(probability: float) -> str:
         return f"{_C.RED}{probability:>5.1%}{_C.RESET}"
 
 
-def _red_warning(red_prob: float) -> str:
-    """Return a colored red wire warning string, or empty if zero."""
+def _red_warning(red_prob: float, show_zero: bool = False) -> str:
+    """Return a colored red wire warning string.
+
+    Args:
+        red_prob: Probability that the slot contains a red wire.
+        show_zero: If True, display even when probability is 0%.
+
+    Returns:
+        Formatted warning string, or empty if zero and not show_zero.
+    """
     if red_prob <= 0:
+        if show_zero:
+            return f"  {_C.GREEN}RED 0.0%{_C.RESET}"
         return ""
     return f"  {_C.RED}⚠ RED {red_prob:.1%}{_C.RESET}"
 
 
 def _format_move(
-    game: bomb_busters.GameState, move: RankedMove, rank: int
+    game: bomb_busters.GameState, move: RankedMove, rank: int,
+    has_red_wires: bool = False,
 ) -> str:
-    """Format a single ranked move as a colored terminal line."""
+    """Format a single ranked move as a colored terminal line.
+
+    Args:
+        game: The current game state.
+        move: The ranked move to format.
+        rank: The display rank number.
+        has_red_wires: Whether the game includes red wires in play.
+            When True, red probability is shown even at 0% for non-100%
+            dual cuts.
+    """
     num = f"{rank:>2}."
     prob = _prob_colored(move.probability)
     val = _value_label(move.guessed_value) if move.guessed_value is not None else "?"
-    red = _red_warning(move.red_probability)
+    # Show red probability at 0% when red wires are in play,
+    # except for guaranteed (100%) actions.
+    show_zero_red = has_red_wires and move.probability < 1.0
+    red = _red_warning(move.red_probability, show_zero=show_zero_red)
 
     if move.action_type == "solo_cut":
         return f"  {num} {prob}  Solo Cut {val}"
@@ -1392,6 +1487,7 @@ def print_probability_analysis(
     game: bomb_busters.GameState,
     observer_index: int,
     max_moves: int = 10,
+    show_progress: bool = True,
 ) -> None:
     """Print a probability analysis for the active player.
 
@@ -1402,6 +1498,8 @@ def print_probability_analysis(
         game: The current game state.
         observer_index: The player whose perspective to analyze.
         max_moves: Maximum number of ranked moves to display.
+        show_progress: If True (default), show a tqdm progress bar
+            during the backward solve.
     """
     player = game.players[observer_index]
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
@@ -1412,8 +1510,15 @@ def print_probability_analysis(
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print()
 
-    # Compute probabilities once and share across both calls
-    probs = compute_position_probabilities(game, observer_index)
+    # Build solver once and share across all calls
+    solver = build_solver(game, observer_index, show_progress=show_progress)
+    if show_progress:
+        print()  # Extra spacing after progress bar
+    if solver is not None:
+        ctx, memo = solver
+        probs = _forward_pass_positions(ctx, memo)
+    else:
+        probs = {}
 
     # Guaranteed actions
     ga = guaranteed_actions(game, observer_index, probs=probs)
@@ -1448,13 +1553,17 @@ def print_probability_analysis(
         print(f"  {_C.DIM}No available moves.{_C.RESET}")
         return
 
+    has_red_wires = any(
+        w.color == bomb_busters.WireColor.RED for w in game.wires_in_play
+    )
+
     shown = moves[:max_moves]
     remaining = len(moves) - len(shown)
 
     print(f"  {_C.BOLD}Top moves by probability:{_C.RESET}")
     print()
     for i, move in enumerate(shown, 1):
-        print(_format_move(game, move, i))
+        print(_format_move(game, move, i, has_red_wires=has_red_wires))
     print()
 
     if remaining > 0:

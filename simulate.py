@@ -174,39 +174,64 @@ def example_red_wire_probability() -> None:
     Demonstrates computing the probability that a target slot contains a
     red wire, which would cause an instant mission failure if cut.
 
-    Scenario (4 players, small hands for fast computation):
-    - Alice (P0, observer): [blue-5, blue-7, blue-10]
-    - Bob (P1): [blue-3, red-3.5, blue-5] — red wire hidden at slot B
-    - Charlie (P2): [blue-6, red-6.5, blue-7]  — red wire hidden at slot B
-    - Diana (P3): [blue-1, blue-2, blue-10]
+    Uses blue wires 1-6 (24 total) plus 2 red wires (26 total) with
+    4 players. Hand sizes: 7-7-6-6. The game state display shows which
+    blue values are in play since it differs from the standard 1-12.
 
-    Bob's slot A (blue-3) and Charlie's slot A (blue-6) have already been
-    cut. From Alice's perspective, she can see the remaining hidden wires
-    and wants to know both the probability of a successful dual cut AND
-    the risk of hitting a red wire.
+    Scenario:
+    - Alice (P0, observer): 7 wires, 4 already cut
+    - Bob (P1): 7 wires, 2 already cut — red wire hidden at slot D
+    - Charlie (P2): 6 wires, 2 already cut — red wire hidden at slot C
+    - Diana (P3): 6 wires, 2 already cut
+
+    Alice is the active player and wants to know the red wire risk
+    when targeting other players' hidden slots.
     """
     print("=" * 60)
     print("EXAMPLE 5: Red wire probability analysis")
     print("=" * 60)
     print()
 
+    # All blue wires 1-6 (24 total) + 2 red wires
+    blue_pool = bomb_busters.create_blue_wires(1, 6)
+    red_wires = [
+        bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+        bomb_busters.Wire(bomb_busters.WireColor.RED, 5.5),
+    ]
+    all_wires = blue_pool + red_wires
+
+    # Build hands manually (26 wires: 7-7-6-6 across 4 players)
     hands = [
-        # Alice (P0, observer)
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
-        # Bob (P1) — red wire at slot B (sort_value 3.5)
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
-         bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
-        # Charlie (P2) — red wire at slot B (sort_value 6.5)
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
-         bomb_busters.Wire(bomb_busters.WireColor.RED, 6.5),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)],
-        # Diana (P3)
+        # Alice (P0, observer) — 7 wires
         [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
          bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)],
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+        # Bob (P1) — 7 wires, red wire at sort_value 3.5
+        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+         bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+        # Charlie (P2) — 6 wires, red wire at sort_value 5.5
+        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+         bomb_busters.Wire(bomb_busters.WireColor.RED, 5.5),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+        # Diana (P3) — 6 wires
+        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
     ]
 
     players = [
@@ -219,7 +244,6 @@ def example_red_wire_probability() -> None:
             ["Alice", "Bob", "Charlie", "Diana"], hands
         )
     ]
-    all_wires = [w for hand in hands for w in hand]
     game = bomb_busters.GameState(
         players=players,
         detonator=bomb_busters.Detonator(failures=0, max_failures=3),
@@ -231,7 +255,7 @@ def example_red_wire_probability() -> None:
                 bomb_busters.MarkerState.KNOWN,
             ),
             bomb_busters.Marker(
-                bomb_busters.WireColor.RED, 6.5,
+                bomb_busters.WireColor.RED, 5.5,
                 bomb_busters.MarkerState.KNOWN,
             ),
         ],
@@ -240,10 +264,21 @@ def example_red_wire_probability() -> None:
         wires_in_play=all_wires,
     )
 
-    # Simulate: Bob's slot A (blue-3) has been cut (e.g. from a prior turn)
+    # Simulate some prior cuts
+    # Alice: cut slots A (blue-1), B (blue-2), E (blue-5), F (blue-5)
+    game.players[0].tile_stand.cut_wire_at(0)
+    game.players[0].tile_stand.cut_wire_at(1)
+    game.players[0].tile_stand.cut_wire_at(4)
+    game.players[0].tile_stand.cut_wire_at(5)
+    # Bob: cut slots A (blue-1), B (blue-2)
     game.players[1].tile_stand.cut_wire_at(0)
-    # Charlie's slot A (blue-6) has been cut
+    game.players[1].tile_stand.cut_wire_at(1)
+    # Charlie: cut slots A (blue-2), B (blue-4)
     game.players[2].tile_stand.cut_wire_at(0)
+    game.players[2].tile_stand.cut_wire_at(1)
+    # Diana: cut slots A (blue-1), B (blue-1)
+    game.players[3].tile_stand.cut_wire_at(0)
+    game.players[3].tile_stand.cut_wire_at(1)
 
     # Alice is the observer and active player
     observer = 0
@@ -251,10 +286,17 @@ def example_red_wire_probability() -> None:
     game.current_player_index = observer
     print(game)
 
+    # Build solver once — reuse ctx/memo for all probability queries.
+    solver = compute_probabilities.build_solver(game, observer)
+    if solver is not None:
+        ctx, memo = solver
+    else:
+        ctx, memo = None, None
+
     # Probability analysis with red wire warnings
     compute_probabilities.print_probability_analysis(game, observer)
 
-    # Detailed red wire analysis
+    # Detailed red wire analysis (reuses shared memo)
     _C = bomb_busters._Colors
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print(f"{_C.BOLD}Red Wire Risk Analysis{_C.RESET}")
@@ -262,7 +304,7 @@ def example_red_wire_probability() -> None:
     print()
 
     probs = compute_probabilities.compute_position_probabilities(
-        game, observer,
+        game, observer, ctx=ctx, memo=memo,
     )
 
     for p_idx in [1, 2, 3]:
@@ -287,24 +329,21 @@ def example_red_wire_probability() -> None:
                 )
     print()
 
-    # Highlight a specific risky action
-    target_p, target_s = 1, 1  # Bob slot B
+    # Highlight a specific risky action (reuses shared memo)
+    target_p, target_s = 1, 3  # Bob slot D (red-3.5 is here)
     dual_prob = compute_probabilities.probability_of_dual_cut(
-        game, observer, target_p, target_s, 5,
+        game, observer, target_p, target_s, 4,
+        ctx=ctx, memo=memo,
     )
     red_prob = compute_probabilities.probability_of_red_wire(
         game, observer, target_p, target_s, probs=probs,
     )
     print(
-        f"  Targeting {_C.BOLD}Bob [B]{_C.RESET} with guess "
-        f"{_C.BLUE}5{_C.RESET}:"
+        f"  Targeting {_C.BOLD}Bob [D]{_C.RESET} with guess "
+        f"{_C.BLUE}4{_C.RESET}:"
     )
     print(f"    Success probability: {dual_prob:.1%}")
     print(f"    Red wire risk:       {_C.RED}{red_prob:.1%}{_C.RESET}")
-    print(
-        f"    Other failure:       "
-        f"{1.0 - dual_prob - red_prob:.1%}"
-    )
     print()
 
 

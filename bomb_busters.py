@@ -151,8 +151,29 @@ def create_all_blue_wires() -> list[Wire]:
     Returns:
         List of 48 blue Wire objects.
     """
+    return create_blue_wires(1, 12)
+
+
+def create_blue_wires(low: int, high: int) -> list[Wire]:
+    """Create blue wire tiles (4 copies each) for a range of values.
+
+    Args:
+        low: Lowest blue wire value (inclusive).
+        high: Highest blue wire value (inclusive).
+
+    Returns:
+        List of blue Wire objects (4 per value).
+
+    Raises:
+        ValueError: If low > high or values are outside 1-12.
+    """
+    if not (1 <= low <= 12 and 1 <= high <= 12 and low <= high):
+        raise ValueError(
+            f"Blue wire range must be within 1-12 with low <= high, "
+            f"got {low}-{high}"
+        )
     wires = []
-    for number in range(1, 13):
+    for number in range(low, high + 1):
         for _ in range(4):
             wires.append(Wire(WireColor.BLUE, float(number)))
     return wires
@@ -1625,6 +1646,18 @@ class GameState:
             str(self.detonator),
             "",
         ]
+
+        # Blue wires in play (only shown when not the standard 1-12)
+        blue_values_in_play = sorted({
+            int(w.sort_value) for w in self.wires_in_play
+            if w.color == WireColor.BLUE
+        })
+        standard_range = list(range(1, 13))
+        if blue_values_in_play and blue_values_in_play != standard_range:
+            lines.append(
+                f"Blue wires in play: "
+                f"{', '.join(str(v) for v in blue_values_in_play)}"
+            )
 
         # Validation tokens
         if self.validation_tokens:

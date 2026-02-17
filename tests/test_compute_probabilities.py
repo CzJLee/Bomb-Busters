@@ -1437,5 +1437,473 @@ class TestRankedMoveRedProbability(unittest.TestCase):
         self.assertNotIn("RED", output)
 
 
+class TestBlueWireSubset(unittest.TestCase):
+    """Tests that probabilities correctly respect a subset of blue wires."""
+
+    def _make_subset_game(
+        self,
+    ) -> tuple[bomb_busters.GameState, int]:
+        """Create a game with only blue wires 1-4 (16 total), 4 players.
+
+        Returns:
+            Tuple of (game, observer_index).
+        """
+        blue_pool = bomb_busters.create_blue_wires(1, 4)
+        # 16 wires, 4 players = 4 each
+        hands = [
+            # P0 (observer)
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            # P1
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            # P2
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            # P3
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+        ]
+        players = [
+            bomb_busters.Player(
+                name=f"P{i}",
+                tile_stand=bomb_busters.TileStand.from_wires(hand),
+                character_card=bomb_busters.create_double_detector(),
+            )
+            for i, hand in enumerate(hands)
+        ]
+        game = bomb_busters.GameState(
+            players=players,
+            detonator=bomb_busters.Detonator(failures=0, max_failures=3),
+            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
+            validation_tokens=set(),
+            markers=[],
+            equipment=[],
+            history=bomb_busters.TurnHistory(),
+            wires_in_play=blue_pool,
+        )
+        return game, 0
+
+    def test_no_out_of_range_wires_in_probabilities(self) -> None:
+        """Position probabilities only contain wires from the subset pool."""
+        game, observer = self._make_subset_game()
+        probs = compute_probabilities.compute_position_probabilities(
+            game, observer,
+        )
+        for (p_idx, s_idx), counter in probs.items():
+            for wire in counter:
+                self.assertIn(
+                    wire.gameplay_value, {1, 2, 3, 4},
+                    f"Wire {wire} at P{p_idx}[{s_idx}] is outside the "
+                    f"blue 1-4 subset pool",
+                )
+
+    def test_dual_cut_zero_for_absent_value(self) -> None:
+        """Dual cut for a value not in the pool returns 0% probability."""
+        game, observer = self._make_subset_game()
+        # Value 5 is not in the pool
+        prob = compute_probabilities.probability_of_dual_cut(
+            game, observer, 1, 0, 5,
+        )
+        self.assertAlmostEqual(prob, 0.0)
+
+    def test_dual_cut_nonzero_for_present_value(self) -> None:
+        """Dual cut for a value in the pool returns non-zero probability."""
+        game, observer = self._make_subset_game()
+        prob = compute_probabilities.probability_of_dual_cut(
+            game, observer, 1, 0, 1,
+        )
+        self.assertGreater(prob, 0.0)
+
+    def test_rank_all_moves_only_subset_values(self) -> None:
+        """Ranked moves only suggest values within the subset pool."""
+        game, observer = self._make_subset_game()
+        moves = compute_probabilities.rank_all_moves(game, observer)
+        for move in moves:
+            if move.guessed_value is not None:
+                self.assertIn(
+                    move.guessed_value, {1, 2, 3, 4},
+                    f"Move suggests value {move.guessed_value} which is "
+                    f"outside the blue 1-4 subset pool",
+                )
+
+    def test_probabilities_sum_to_one(self) -> None:
+        """Each hidden slot's probability distribution sums to 1.0."""
+        game, observer = self._make_subset_game()
+        probs = compute_probabilities.compute_position_probabilities(
+            game, observer,
+        )
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            self.assertGreater(total, 0)
+            # Each wire's fraction should sum to 1.0
+            prob_sum = sum(count / total for count in counter.values())
+            self.assertAlmostEqual(
+                prob_sum, 1.0, places=10,
+                msg=f"P{p_idx}[{s_idx}] probabilities don't sum to 1.0",
+            )
+
+    def test_subset_with_red_wires(self) -> None:
+        """Probabilities work correctly with blue subset + red wires."""
+        blue_pool = bomb_busters.create_blue_wires(1, 3)  # 12 blue
+        red_wire = bomb_busters.Wire(bomb_busters.WireColor.RED, 2.5)
+        all_wires = blue_pool + [red_wire]
+        # 13 wires, 4 players = 4-3-3-3
+        hands = [
+            # P0 (observer) — 4 wires
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+            # P1 — 3 wires including the red wire
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 2.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+            # P2 — 3 wires
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+            # P3 — 3 wires
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+        ]
+        players = [
+            bomb_busters.Player(
+                name=f"P{i}",
+                tile_stand=bomb_busters.TileStand.from_wires(hand),
+                character_card=bomb_busters.create_double_detector(),
+            )
+            for i, hand in enumerate(hands)
+        ]
+        game = bomb_busters.GameState(
+            players=players,
+            detonator=bomb_busters.Detonator(failures=0, max_failures=3),
+            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
+            validation_tokens=set(),
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 2.5,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+            ],
+            equipment=[],
+            history=bomb_busters.TurnHistory(),
+            wires_in_play=all_wires,
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, 0,
+        )
+        # No wire with value > 3 should appear
+        for (p_idx, s_idx), counter in probs.items():
+            for wire in counter:
+                self.assertLessEqual(
+                    wire.sort_value, 3.0,
+                    f"Wire {wire} at P{p_idx}[{s_idx}] exceeds blue 1-3 "
+                    f"+ red range",
+                )
+        # Red wire should have nonzero probability on some slot of P1
+        # (P1 has slots A=blue-1, B=red-2.5, C=blue-3; B is hidden)
+        red_probs = []
+        for s_idx in range(3):
+            key = (1, s_idx)
+            if key in probs:
+                for wire, count in probs[key].items():
+                    if wire.color == bomb_busters.WireColor.RED:
+                        red_probs.append(count)
+        self.assertTrue(
+            any(c > 0 for c in red_probs),
+            "Red wire should have nonzero probability on P1's stand",
+        )
+
+
+class TestSharedMemo(unittest.TestCase):
+    """Tests for shared memo correctness via build_solver().
+
+    Verifies that pre-building ctx/memo with build_solver() and passing
+    them to API functions produces identical results to calling those
+    functions without pre-built ctx/memo (which triggers independent
+    solver builds internally).
+    """
+
+    def _make_game_with_red(
+        self,
+    ) -> tuple[bomb_busters.GameState, int]:
+        """Create a game with red wires for shared-memo testing.
+
+        P0 (observer): [blue-5, blue-8]
+        P1: [blue-3, red-3.5, blue-6] — red wire in middle
+        P2: [blue-7, blue-9]
+        P3: [blue-10, blue-11]
+
+        One red wire in play. P1 has one cut slot to create constraints.
+
+        Returns:
+            Tuple of (game, observer_index).
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        game.players[1].tile_stand.cut_wire_at(0)  # Cut blue-3
+        return game, 0
+
+    def _make_game_two_reds(
+        self,
+    ) -> tuple[bomb_busters.GameState, int]:
+        """Create a game with two red wires for DD red testing.
+
+        P0 (observer): [blue-5, blue-8]
+        P1: [red-3.5, red-4.5, blue-6] — two adjacent reds
+        P2: [blue-7, blue-9]
+        P3: [blue-10, blue-11]
+
+        Returns:
+            Tuple of (game, observer_index).
+        """
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+             bomb_busters.Wire(bomb_busters.WireColor.RED, 4.5),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
+        ])
+        game.markers = [
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 3.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+            bomb_busters.Marker(
+                bomb_busters.WireColor.RED, 4.5,
+                bomb_busters.MarkerState.KNOWN,
+            ),
+        ]
+        return game, 0
+
+    def test_position_probs_match_with_shared_memo(self) -> None:
+        """compute_position_probabilities with shared memo matches standalone."""
+        game, obs = self._make_game_with_red()
+        standalone = compute_probabilities.compute_position_probabilities(
+            game, obs,
+        )
+        solver = compute_probabilities.build_solver(
+            game, obs, show_progress=False,
+        )
+        self.assertIsNotNone(solver)
+        ctx, memo = solver
+        shared = compute_probabilities.compute_position_probabilities(
+            game, obs, ctx=ctx, memo=memo,
+        )
+        self.assertEqual(standalone.keys(), shared.keys())
+        for key in standalone:
+            self.assertEqual(
+                dict(standalone[key]), dict(shared[key]),
+                f"Mismatch at {key}",
+            )
+
+    def test_dual_cut_matches_with_shared_memo(self) -> None:
+        """probability_of_dual_cut with shared memo matches standalone."""
+        game, obs = self._make_game_with_red()
+        solver = compute_probabilities.build_solver(
+            game, obs, show_progress=False,
+        )
+        ctx, memo = solver
+        # Test several target/value combinations
+        for target_p in range(1, 4):
+            stand = game.players[target_p].tile_stand
+            for s_idx, slot in enumerate(stand.slots):
+                if not slot.is_hidden:
+                    continue
+                for val in [5, 6, 7, 8, 9, 10, 11]:
+                    standalone = compute_probabilities.probability_of_dual_cut(
+                        game, obs, target_p, s_idx, val,
+                    )
+                    shared = compute_probabilities.probability_of_dual_cut(
+                        game, obs, target_p, s_idx, val,
+                        ctx=ctx, memo=memo,
+                    )
+                    self.assertAlmostEqual(
+                        standalone, shared, places=10,
+                        msg=(
+                            f"Dual cut P{target_p}[{s_idx}]={val}: "
+                            f"standalone={standalone}, shared={shared}"
+                        ),
+                    )
+
+    def test_dd_matches_with_shared_memo(self) -> None:
+        """probability_of_double_detector with shared memo matches standalone."""
+        game, obs = self._make_game_with_red()
+        solver = compute_probabilities.build_solver(game, obs, show_progress=False)
+        ctx, memo = solver
+        # DD on P1 slots 1,2 (the two hidden slots) guessing value 6
+        standalone = compute_probabilities.probability_of_double_detector(
+            game, obs, 1, 1, 2, 6,
+        )
+        shared = compute_probabilities.probability_of_double_detector(
+            game, obs, 1, 1, 2, 6, ctx=ctx, memo=memo,
+        )
+        self.assertAlmostEqual(
+            standalone, shared, places=10,
+            msg="DD with shared memo should match standalone",
+        )
+
+    def test_dd_multiple_targets_shared_memo(self) -> None:
+        """Multiple DD calls with same shared memo all match standalone."""
+        game, obs = self._make_game_with_red()
+        solver = compute_probabilities.build_solver(game, obs, show_progress=False)
+        ctx, memo = solver
+        # Test DD on different players and values
+        test_cases = [
+            (2, 0, 1, 7),   # P2 slots 0,1 guess 7
+            (2, 0, 1, 9),   # P2 slots 0,1 guess 9
+            (3, 0, 1, 10),  # P3 slots 0,1 guess 10
+            (3, 0, 1, 11),  # P3 slots 0,1 guess 11
+        ]
+        for target_p, s1, s2, val in test_cases:
+            standalone = compute_probabilities.probability_of_double_detector(
+                game, obs, target_p, s1, s2, val,
+            )
+            shared = compute_probabilities.probability_of_double_detector(
+                game, obs, target_p, s1, s2, val, ctx=ctx, memo=memo,
+            )
+            self.assertAlmostEqual(
+                standalone, shared, places=10,
+                msg=(
+                    f"DD P{target_p}[{s1},{s2}]={val}: "
+                    f"standalone={standalone}, shared={shared}"
+                ),
+            )
+
+    def test_red_wire_dd_matches_with_shared_memo(self) -> None:
+        """probability_of_red_wire_dd with shared memo matches standalone."""
+        game, obs = self._make_game_two_reds()
+        solver = compute_probabilities.build_solver(game, obs, show_progress=False)
+        ctx, memo = solver
+        # P1 slots 0,1 are two reds
+        standalone = compute_probabilities.probability_of_red_wire_dd(
+            game, obs, 1, 0, 1,
+        )
+        shared = compute_probabilities.probability_of_red_wire_dd(
+            game, obs, 1, 0, 1, ctx=ctx, memo=memo,
+        )
+        self.assertAlmostEqual(
+            standalone, shared, places=10,
+            msg="Red DD with shared memo should match standalone",
+        )
+
+    def test_red_wire_dd_zero_case_shared_memo(self) -> None:
+        """Red DD = 0% case produces same result with shared memo."""
+        game, obs = self._make_game_with_red()  # Only 1 red wire
+        solver = compute_probabilities.build_solver(game, obs, show_progress=False)
+        ctx, memo = solver
+        # With only 1 red, P(both red) = 0
+        standalone = compute_probabilities.probability_of_red_wire_dd(
+            game, obs, 1, 1, 2,
+        )
+        shared = compute_probabilities.probability_of_red_wire_dd(
+            game, obs, 1, 1, 2, ctx=ctx, memo=memo,
+        )
+        self.assertAlmostEqual(standalone, 0.0)
+        self.assertAlmostEqual(shared, 0.0)
+
+    def test_build_solver_returns_none_no_hidden(self) -> None:
+        """build_solver returns None when no hidden positions exist."""
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+        ])
+        # Cut all other players' wires
+        for p in range(1, 4):
+            game.players[p].tile_stand.cut_wire_at(0)
+        result = compute_probabilities.build_solver(game, 0, show_progress=False)
+        self.assertIsNone(result)
+
+    def test_build_solver_single_hidden_player(self) -> None:
+        """Shared memo works when only one other player has hidden slots."""
+        game = _make_known_game([
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+        ])
+        # Cut all of P2 and P3 so only P1 has hidden slots
+        for i in range(2):
+            game.players[2].tile_stand.cut_wire_at(i)
+            game.players[3].tile_stand.cut_wire_at(i)
+
+        solver = compute_probabilities.build_solver(game, 0, show_progress=False)
+        self.assertIsNotNone(solver)
+        ctx, memo = solver
+        standalone = compute_probabilities.compute_position_probabilities(
+            game, 0,
+        )
+        shared = compute_probabilities.compute_position_probabilities(
+            game, 0, ctx=ctx, memo=memo,
+        )
+        self.assertEqual(standalone.keys(), shared.keys())
+        for key in standalone:
+            self.assertEqual(dict(standalone[key]), dict(shared[key]))
+
+    def test_rank_all_moves_matches_with_shared_memo(self) -> None:
+        """rank_all_moves uses shared probs consistently."""
+        game, obs = self._make_game_with_red()
+        # Compute probs both ways and verify rank_all_moves gives same results
+        solver = compute_probabilities.build_solver(game, obs, show_progress=False)
+        ctx, memo = solver
+        probs_standalone = compute_probabilities.compute_position_probabilities(
+            game, obs,
+        )
+        probs_shared = compute_probabilities.compute_position_probabilities(
+            game, obs, ctx=ctx, memo=memo,
+        )
+        moves_standalone = compute_probabilities.rank_all_moves(
+            game, obs, probs=probs_standalone,
+        )
+        moves_shared = compute_probabilities.rank_all_moves(
+            game, obs, probs=probs_shared,
+        )
+        self.assertEqual(len(moves_standalone), len(moves_shared))
+        for m1, m2 in zip(moves_standalone, moves_shared):
+            self.assertEqual(m1.action_type, m2.action_type)
+            self.assertEqual(m1.target_player, m2.target_player)
+            self.assertEqual(m1.target_slot, m2.target_slot)
+            self.assertEqual(m1.guessed_value, m2.guessed_value)
+            self.assertAlmostEqual(m1.probability, m2.probability, places=10)
+            self.assertAlmostEqual(
+                m1.red_probability, m2.red_probability, places=10,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
