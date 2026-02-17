@@ -1905,5 +1905,136 @@ class TestSharedMemo(unittest.TestCase):
             )
 
 
+class TestYellowInfoRevealed(unittest.TestCase):
+    """Tests for yellow info-revealed wire handling in the probability engine."""
+
+    def test_yellow_info_revealed_constraint(self) -> None:
+        """An INFO_REVEALED yellow slot in calculator mode gets a yellow wire.
+
+        In calculator mode, a yellow info token (info_token='YELLOW',
+        wire=None) tells us the slot contains a yellow wire but not which
+        one. The solver should assign only yellow wires to that position.
+
+        Setup:
+            P0 (observer): [blue-3, blue-7]
+            P1: [CUT blue-2, INFO_REVEALED YELLOW (wire=None), hidden unknown]
+            P2: [hidden unknown, hidden unknown]
+            P3: [hidden unknown, hidden unknown]
+
+        Wires in play: blue 1-8 (one each) + yellow-4.1 + yellow-6.1
+        Known: P0=[3,7], P1[0]=CUT-2. Pool = [1, 4, Y4.1, 5, 6, Y6.1, 8]
+        P1[1] is INFO_REVEALED yellow, bounds (2.0, 13.0).
+        The solver should assign only yellow wires (Y4.1 or Y6.1) there.
+        """
+        stands = [
+            # P0: knows own hand
+            [
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+                ),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
+                ),
+            ],
+            # P1: cut blue-2, info-revealed yellow (unknown), hidden
+            [
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+                bomb_busters.Slot(
+                    wire=None,
+                    state=bomb_busters.SlotState.INFO_REVEALED,
+                    info_token="YELLOW",
+                ),
+                bomb_busters.Slot(wire=None),
+            ],
+            # P2: both hidden
+            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            # P3: both hidden
+            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+        ]
+        all_wires = (
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 9)]
+            + [
+                bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
+                bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 6.1),
+            ]
+        )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=all_wires,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # P1[1] (the info-revealed yellow slot) should exist in probs
+        key = (1, 1)
+        self.assertIn(key, probs)
+        counter = probs[key]
+
+        # All wires assigned to P1[1] must be yellow
+        for wire, count in counter.items():
+            if count > 0:
+                self.assertEqual(
+                    wire.color, bomb_busters.WireColor.YELLOW,
+                    f"Non-yellow wire {wire!r} assigned to info-revealed "
+                    f"yellow slot with count {count}",
+                )
+
+        # Both Y4.1 and Y6.1 should be possible
+        y4 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)
+        y6 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 6.1)
+        self.assertGreater(counter.get(y4, 0), 0)
+        self.assertGreater(counter.get(y6, 0), 0)
+
+    def test_yellow_info_revealed_not_double_counted(self) -> None:
+        """Yellow info-revealed wire is assigned exactly once by the solver.
+
+        The total number of yellow wires in valid distributions should
+        match the number of yellow wires in the unknown pool. This
+        verifies the yellow wire isn't double-counted (once in the pool
+        and once forced into the info-revealed slot).
+        """
+        stands = [
+            [
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                ),
+            ],
+            # P1: info-revealed yellow, one hidden
+            [
+                bomb_busters.Slot(
+                    wire=None,
+                    state=bomb_busters.SlotState.INFO_REVEALED,
+                    info_token="YELLOW",
+                ),
+                bomb_busters.Slot(wire=None),
+            ],
+            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+        ]
+        all_wires = (
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 8)]
+            + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)]
+        )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=all_wires,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # P1[0] should always be yellow-3.1 (only yellow wire in pool)
+        key = (1, 0)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        total = sum(counter.values())
+        y3 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)
+        self.assertEqual(counter.get(y3, 0), total)
+
+
 if __name__ == "__main__":
     unittest.main()

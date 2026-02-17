@@ -23,6 +23,7 @@ class _Colors:
     RED = "\033[91m"
     YELLOW = "\033[93m"
     GREEN = "\033[92m"
+    ORANGE = "\033[38;5;208m"
     DIM = "\033[2m"
     BOLD = "\033[1m"
     RESET = "\033[0m"
@@ -255,6 +256,12 @@ class Slot:
                 return plain, colored
             return "?", f"{_Colors.GREEN}?{_Colors.RESET}"
         else:  # INFO_REVEALED
+            if self.info_token == "YELLOW":
+                # Yellow info token: we know it's yellow but not which one.
+                # Display as "Y" in yellow text (not the full "YELLOW" string).
+                plain = "Y"
+                colored = f"{_Colors.BOLD}{_Colors.YELLOW}Y{_Colors.RESET}"
+                return plain, colored
             if self.info_token is not None:
                 token_str = str(self.info_token)
             else:
@@ -601,8 +608,17 @@ class Detonator:
 
     def __str__(self) -> str:
         if self.is_exploded:
-            return f"Mistakes remaining: 💀 BOOM!"
-        return f"Mistakes remaining: {self.remaining_failures}"
+            return f"Mistakes remaining: {_Colors.RED}💀 BOOM!{_Colors.RESET}"
+        remaining = self.remaining_failures
+        if remaining >= self.max_failures:
+            color = _Colors.GREEN
+        elif remaining >= 2:
+            color = _Colors.YELLOW
+        elif remaining == 1:
+            color = _Colors.ORANGE
+        else:
+            color = _Colors.RED
+        return f"Mistakes remaining: {color}{remaining}{_Colors.RESET}"
 
 
 # =============================================================================
@@ -1659,11 +1675,43 @@ class GameState:
                 f"{', '.join(str(v) for v in blue_values_in_play)}"
             )
 
-        # Validation tokens
-        if self.validation_tokens:
-            validated = sorted(self.validation_tokens)
+        # Validated / cleared wires
+        # Blue: validation tokens (all 4 copies cut)
+        # Yellow/Red: unique wires that have been cut
+        validated_parts: list[tuple[float, str]] = []
+        for v in sorted(self.validation_tokens):
+            label = f"{_Colors.BLUE}{v}{_Colors.RESET}"
+            validated_parts.append((float(v), label))
+        # Scan for cut yellow and red wires
+        for player in self.players:
+            for slot in player.tile_stand.slots:
+                if (
+                    slot.is_cut
+                    and slot.wire is not None
+                    and slot.wire.color == WireColor.YELLOW
+                ):
+                    color = _Colors.YELLOW
+                    label = f"{color}Y{slot.wire.base_number}{_Colors.RESET}"
+                    validated_parts.append((slot.wire.sort_value, label))
+                elif (
+                    slot.is_cut
+                    and slot.wire is not None
+                    and slot.wire.color == WireColor.RED
+                ):
+                    color = _Colors.RED
+                    label = f"{color}R{slot.wire.base_number}{_Colors.RESET}"
+                    validated_parts.append((slot.wire.sort_value, label))
+        # Deduplicate (same wire cut by multiple copies shouldn't repeat)
+        seen_sort_values: set[float] = set()
+        unique_parts: list[tuple[float, str]] = []
+        for sv, label in validated_parts:
+            if sv not in seen_sort_values:
+                seen_sort_values.add(sv)
+                unique_parts.append((sv, label))
+        unique_parts.sort(key=lambda x: x[0])
+        if unique_parts:
             lines.append(
-                f"Validated: {', '.join(str(v) for v in validated)}"
+                f"Validated: {', '.join(label for _, label in unique_parts)}"
             )
         else:
             lines.append("Validated: (none)")

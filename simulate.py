@@ -1,359 +1,233 @@
-"""Quick simulation script for Bomb Busters."""
+"""Simulation script for Bomb Busters probability analysis.
+
+Demonstrates using ``GameState.from_partial_state()`` to enter a
+mid-game scenario and run probability analysis from the active
+player's perspective. Includes dual cut, solo cut, Double Detector,
+and red wire risk calculations.
+"""
 
 import bomb_busters
 import compute_probabilities
 
-
-# =============================================================================
-# Examples
-# =============================================================================
+# Toggle to include Double Detector moves in probability analysis.
+INCLUDE_DOUBLE_DETECTOR = True
 
 
-def example_full_game() -> None:
-    """Example 1: Blue-only game in god mode."""
-    print("=" * 60)
-    print("EXAMPLE 1: Blue-only game (god mode — all wires visible)")
-    print("=" * 60)
-    print()
+# ── Wire helpers ────────────────────────────────────────────
 
-    game = bomb_busters.GameState.create_game(
-        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        seed=42,
+def _blue(n: int) -> bomb_busters.Wire:
+    """Create a blue wire with value n."""
+    return bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(n))
+
+
+def _yellow(n: int) -> bomb_busters.Wire:
+    """Create a yellow wire with sort value n.1."""
+    return bomb_busters.Wire(bomb_busters.WireColor.YELLOW, n + 0.1)
+
+
+def _red(n: int) -> bomb_busters.Wire:
+    """Create a red wire with sort value n.5."""
+    return bomb_busters.Wire(bomb_busters.WireColor.RED, n + 0.5)
+
+
+# ── Slot helpers ────────────────────────────────────────────
+
+def _cut(wire: bomb_busters.Wire) -> bomb_busters.Slot:
+    """A cut (face-up) slot with a known wire."""
+    return bomb_busters.Slot(
+        wire=wire, state=bomb_busters.SlotState.CUT,
     )
-    print(game)
 
 
-def example_colored_god_mode() -> None:
-    """Example 2: Colored wires game in god mode.
+def _hidden(wire: bomb_busters.Wire | None = None) -> bomb_busters.Slot:
+    """A hidden (face-down) slot. Wire is None for unknown slots."""
+    return bomb_busters.Slot(
+        wire=wire, state=bomb_busters.SlotState.HIDDEN,
+    )
 
-    Includes 2 yellow and 1 red wire so all wire types are visible.
+
+def _info(
+    token: int | str, wire: bomb_busters.Wire | None = None,
+) -> bomb_busters.Slot:
+    """An info-revealed slot from a failed dual cut."""
+    return bomb_busters.Slot(
+        wire=wire, state=bomb_busters.SlotState.INFO_REVEALED,
+        info_token=token,
+    )
+
+
+# ── Main ────────────────────────────────────────────────────
+
+def main() -> None:
+    """Mid-game probability analysis from Alice's perspective.
+
+    A 5-player game with all 48 blue wires (values 1-12), 2 yellow
+    wires (Y4 and Y7), and 1 red wire (R5). The game is about 45%
+    resolved (22 wires cut, 1 info token). Blue-3, blue-9, and
+    blue-12 are fully validated.
+
+    Alice (Player 0) is the active player and observer. She has:
+    - A yellow wire (Y4) for yellow cut potential
+    - Two blue-8s with all other blue-8s cut (solo cut available)
+    - Blue-4, blue-6, and blue-7 for dual cut targets
+    - No red wire (red wire risk is visible on other players' stands)
+
+    Diana's slot E has an info token showing blue-6 from a prior
+    failed dual cut. The detonator has advanced once.
+
+    Wire distribution (51 total = 48 blue + Y4.1 + Y7.1 + R5.5):
+
+        Alice  (11): B1  B2  B4  Y4  B6  B7  B8  B8  B9 B11 B12
+        Bob    (10): B1  B3  B4  B5  B7  B8  B9 B10 B11 B12
+        Charlie(10): B2  B3  B4  B6  B7  B8  B9 B10 B11 B12
+        Diana  (10): B2  B3  B5  R5  B6  B7  Y7  B9 B10 B11
+        Eve    (10): B1  B1  B2  B3  B4  B5  B5  B6 B10 B12
     """
     print("=" * 60)
-    print("EXAMPLE 2: Colored wires (god mode — all wires visible)")
+    print("Mid-game probability analysis (Alice's perspective)")
     print("=" * 60)
     print()
 
-    game = bomb_busters.GameState.create_game(
-        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        wire_configs=[
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.YELLOW, count=2),
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.RED, count=1),
-        ],
-        seed=1,
-    )
-    print(game)
-
-
-def example_colored_observer() -> None:
-    """Example 3: Same colored wires game from Bob's perspective.
-
-    Bob (Player 1) has a red wire at B and a yellow wire at J.
-    His own wires are visible; everyone else's hidden wires show as '?'.
-    """
-    print("=" * 60)
-    print("EXAMPLE 3: Same game — Bob's perspective (observer_index=1)")
-    print("=" * 60)
-    print()
-
-    game = bomb_busters.GameState.create_game(
-        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        wire_configs=[
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.YELLOW, count=2),
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.RED, count=1),
-        ],
-        seed=1,
-    )
-    game.observer_index = 1
-    print(game)
-
-
-def example_mid_game_probabilities() -> None:
-    """Example 4: Mid-game probability analysis from Eve's perspective.
-
-    A 5-player game with 2 yellow and 1 red wire, progressed through
-    9 turns. ~1/3 of wires have been cut (16 of 51), with 3 validations
-    completed (1, 2, 3), one failed dual cut revealing info, and 1
-    detonator failure.
-
-    Eve (Player 4) is the active player. The analysis shows her
-    guaranteed actions and top moves ranked by probability.
-    """
-    print("=" * 60)
-    print("EXAMPLE 4: Mid-game probability analysis (Eve's perspective)")
-    print("=" * 60)
-    print()
-
-    game = bomb_busters.GameState.create_game(
-        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        wire_configs=[
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.YELLOW, count=2),
-            bomb_busters.WireConfig(color=bomb_busters.WireColor.RED, count=1),
-        ],
-        seed=3,
+    # ── Build wires_in_play ─────────────────────────────────
+    wires_in_play = (
+        bomb_busters.create_all_blue_wires()
+        + [_yellow(4), _yellow(7)]
+        + [_red(5)]
     )
 
-    # --- Replay 9 turns of game history ---
+    # ── Board markers ───────────────────────────────────────
+    markers = [
+        bomb_busters.Marker(
+            bomb_busters.WireColor.YELLOW, 4.1,
+            bomb_busters.MarkerState.KNOWN,
+        ),
+        bomb_busters.Marker(
+            bomb_busters.WireColor.YELLOW, 7.1,
+            bomb_busters.MarkerState.KNOWN,
+        ),
+        bomb_busters.Marker(
+            bomb_busters.WireColor.RED, 5.5,
+            bomb_busters.MarkerState.KNOWN,
+        ),
+    ]
 
-    # Turn 1: Alice (P0) dual cuts blue-1 on Bob (P1) — SUCCESS
+    # ── Turn history ──────────────────────────────────────────
+    # Diana's slot E has an info token from a prior failed dual cut
+    # (entered directly via _info() above). The detonator advanced
+    # once. No history record is needed — the info token and
+    # detonator state are set directly in calculator mode.
+    history = bomb_busters.TurnHistory()
+
+    # ── Character cards ─────────────────────────────────────
+    character_cards: list[bomb_busters.CharacterCard | None] = [
+        bomb_busters.create_double_detector() for _ in range(5)
+    ]
+
+    # ── Tile stands ─────────────────────────────────────────
+    #
+    # Alice (P0) — Observer. All wires known to her.
+    # Hidden: B4, Y4, B6, B7, B8×2  |  Cut: B1, B2, B9, B11, B12
+    # Solo cut available: blue-8 (all other B8s are cut)
+    # Dual cut values: 4, YELLOW, 6, 7
+    alice_stand = [
+        _cut(_blue(1)),        # A
+        _cut(_blue(2)),        # B
+        _hidden(_blue(4)),     # C
+        _hidden(_yellow(4)),   # D — yellow wire
+        _hidden(_blue(6)),     # E
+        _hidden(_blue(7)),     # F
+        _hidden(_blue(8)),     # G — solo cut pair
+        _hidden(_blue(8)),     # H — solo cut pair
+        _cut(_blue(9)),        # I
+        _cut(_blue(11)),       # J
+        _cut(_blue(12)),       # K
+    ]
+
+    # Bob (P1) — 5 cut, 5 hidden (unknown to Alice)
+    bob_stand = [
+        _cut(_blue(1)),   # A
+        _cut(_blue(3)),   # B
+        _hidden(),        # C — B4
+        _hidden(),        # D — B5
+        _hidden(),        # E — B7
+        _cut(_blue(8)),   # F
+        _cut(_blue(9)),   # G
+        _hidden(),        # H — B10
+        _hidden(),        # I — B11
+        _cut(_blue(12)),  # J
+    ]
+
+    # Charlie (P2) — 5 cut, 5 hidden (unknown to Alice)
+    charlie_stand = [
+        _cut(_blue(2)),   # A
+        _cut(_blue(3)),   # B
+        _hidden(),        # C — B4
+        _hidden(),        # D — B6
+        _hidden(),        # E — B7
+        _cut(_blue(8)),   # F
+        _cut(_blue(9)),   # G
+        _hidden(),        # H — B10
+        _hidden(),        # I — B11
+        _cut(_blue(12)),  # J
+    ]
+
+    # Diana (P3) — 4 cut, 1 info-revealed, 5 hidden
+    # Slot E has an info token showing blue-6 (from Eve's
+    # failed dual cut guessing blue-7).
+    # The red wire R5.5 lurks in slot D (unknown to Alice).
+    diana_stand = [
+        _cut(_blue(2)),        # A
+        _cut(_blue(3)),        # B
+        _hidden(),             # C — B5
+        _hidden(),             # D — R5.5 (red wire!)
+        _info(6, _blue(6)),    # E — info: blue-6
+        _hidden(),             # F — B7
+        _hidden(),             # G — Y7.1
+        _cut(_blue(9)),        # H
+        _hidden(),             # I — B10
+        _cut(_blue(11)),       # J
+    ]
+
+    # Eve (P4) — 3 cut, 7 hidden (unknown to Alice)
+    eve_stand = [
+        _cut(_blue(1)),   # A
+        _hidden(),        # B — B1
+        _hidden(),        # C — B2
+        _cut(_blue(3)),   # D
+        _hidden(),        # E — B4
+        _hidden(),        # F — B5
+        _hidden(),        # G — B5
+        _hidden(),        # H — B6
+        _hidden(),        # I — B10
+        _cut(_blue(12)),  # J
+    ]
+
+    # ── Create game state ───────────────────────────────────
+    game = bomb_busters.GameState.from_partial_state(
+        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+        stands=[
+            alice_stand, bob_stand, charlie_stand,
+            diana_stand, eve_stand,
+        ],
+        detonator_failures=1,
+        validation_tokens={3, 9, 12},
+        markers=markers,
+        wires_in_play=wires_in_play,
+        character_cards=character_cards,
+        history=history,
+    )
     game.current_player_index = 0
-    game.execute_dual_cut(
-        target_player_index=1,
-        target_slot_index=0,
-        guessed_value=1,
-    )
+    game.observer_index = 0
 
-    # Turn 2: Bob (P1) dual cuts blue-2 on Alice (P0) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=0,
-        target_slot_index=1,
-        guessed_value=2,
-    )
-
-    # Turn 3: Charlie (P2) dual cuts blue-1 on Eve (P4) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=4,
-        target_slot_index=0,
-        guessed_value=1,
-    )
-
-    # Turn 4: Diana (P3) dual cuts blue-3 on Eve (P4) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=4,
-        target_slot_index=2,
-        guessed_value=3,
-    )
-
-    # Turn 5: Eve (P4) dual cuts blue-2 on Charlie (P2) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=2,
-        target_slot_index=1,
-        guessed_value=2,
-    )
-
-    # Turn 6: Alice (P0) dual cuts blue-3 on Bob (P1) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=1,
-        target_slot_index=2,
-        guessed_value=3,
-    )
-
-    # Turn 7: Bob (P1) guesses blue-5 on Charlie (P2) slot E — FAIL
-    #   Actual wire is blue-7; info token placed, detonator advances.
-    game.execute_dual_cut(
-        target_player_index=2,
-        target_slot_index=4,
-        guessed_value=5,
-    )
-
-    # Turn 8: Charlie (P2) dual cuts blue-6 on Alice (P0) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=0,
-        target_slot_index=5,
-        guessed_value=6,
-    )
-
-    # Turn 9: Diana (P3) dual cuts blue-7 on Alice (P0) — SUCCESS
-    game.execute_dual_cut(
-        target_player_index=0,
-        target_slot_index=6,
-        guessed_value=7,
-    )
-
-    # --- Display from Eve's perspective ---
-    observer = game.current_player_index  # Eve (P4)
-    game.observer_index = observer
+    # ── Display game state ──────────────────────────────────
     print(game)
 
-    # --- Probability analysis ---
-    compute_probabilities.print_probability_analysis(game, observer)
-
-
-def example_red_wire_probability() -> None:
-    """Example 5: Red wire probability analysis.
-
-    Demonstrates computing the probability that a target slot contains a
-    red wire, which would cause an instant mission failure if cut.
-
-    Uses blue wires 1-6 (24 total) plus 2 red wires (26 total) with
-    4 players. Hand sizes: 7-7-6-6. The game state display shows which
-    blue values are in play since it differs from the standard 1-12.
-
-    Scenario:
-    - Alice (P0, observer): 7 wires, 4 already cut
-    - Bob (P1): 7 wires, 2 already cut — red wire hidden at slot D
-    - Charlie (P2): 6 wires, 2 already cut — red wire hidden at slot C
-    - Diana (P3): 6 wires, 2 already cut
-
-    Alice is the active player and wants to know the red wire risk
-    when targeting other players' hidden slots.
-    """
-    print("=" * 60)
-    print("EXAMPLE 5: Red wire probability analysis")
-    print("=" * 60)
-    print()
-
-    # All blue wires 1-6 (24 total) + 2 red wires
-    blue_pool = bomb_busters.create_blue_wires(1, 6)
-    red_wires = [
-        bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
-        bomb_busters.Wire(bomb_busters.WireColor.RED, 5.5),
-    ]
-    all_wires = blue_pool + red_wires
-
-    # Build hands manually (26 wires: 7-7-6-6 across 4 players)
-    hands = [
-        # Alice (P0, observer) — 7 wires
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
-        # Bob (P1) — 7 wires, red wire at sort_value 3.5
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
-         bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
-        # Charlie (P2) — 6 wires, red wire at sort_value 5.5
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
-         bomb_busters.Wire(bomb_busters.WireColor.RED, 5.5),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
-        # Diana (P3) — 6 wires
-        [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
-         bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
-    ]
-
-    players = [
-        bomb_busters.Player(
-            name=name,
-            tile_stand=bomb_busters.TileStand.from_wires(hand),
-            character_card=bomb_busters.create_double_detector(),
-        )
-        for name, hand in zip(
-            ["Alice", "Bob", "Charlie", "Diana"], hands
-        )
-    ]
-    game = bomb_busters.GameState(
-        players=players,
-        detonator=bomb_busters.Detonator(failures=0, max_failures=3),
-        info_token_pool=bomb_busters.InfoTokenPool.create_full(),
-        validation_tokens=set(),
-        markers=[
-            bomb_busters.Marker(
-                bomb_busters.WireColor.RED, 3.5,
-                bomb_busters.MarkerState.KNOWN,
-            ),
-            bomb_busters.Marker(
-                bomb_busters.WireColor.RED, 5.5,
-                bomb_busters.MarkerState.KNOWN,
-            ),
-        ],
-        equipment=[],
-        history=bomb_busters.TurnHistory(),
-        wires_in_play=all_wires,
+    # ── Probability analysis ────────────────────────────────
+    compute_probabilities.print_probability_analysis(
+        game, observer_index=0, max_moves=10,
+        include_dd=INCLUDE_DOUBLE_DETECTOR,
     )
-
-    # Simulate some prior cuts
-    # Alice: cut slots A (blue-1), B (blue-2), E (blue-5), F (blue-5)
-    game.players[0].tile_stand.cut_wire_at(0)
-    game.players[0].tile_stand.cut_wire_at(1)
-    game.players[0].tile_stand.cut_wire_at(4)
-    game.players[0].tile_stand.cut_wire_at(5)
-    # Bob: cut slots A (blue-1), B (blue-2)
-    game.players[1].tile_stand.cut_wire_at(0)
-    game.players[1].tile_stand.cut_wire_at(1)
-    # Charlie: cut slots A (blue-2), B (blue-4)
-    game.players[2].tile_stand.cut_wire_at(0)
-    game.players[2].tile_stand.cut_wire_at(1)
-    # Diana: cut slots A (blue-1), B (blue-1)
-    game.players[3].tile_stand.cut_wire_at(0)
-    game.players[3].tile_stand.cut_wire_at(1)
-
-    # Alice is the observer and active player
-    observer = 0
-    game.observer_index = observer
-    game.current_player_index = observer
-    print(game)
-
-    # Build solver once — reuse ctx/memo for all probability queries.
-    solver = compute_probabilities.build_solver(game, observer)
-    if solver is not None:
-        ctx, memo = solver
-    else:
-        ctx, memo = None, None
-
-    # Probability analysis with red wire warnings
-    compute_probabilities.print_probability_analysis(game, observer)
-
-    # Detailed red wire analysis (reuses shared memo)
-    _C = bomb_busters._Colors
-    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
-    print(f"{_C.BOLD}Red Wire Risk Analysis{_C.RESET}")
-    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
-    print()
-
-    probs = compute_probabilities.compute_position_probabilities(
-        game, observer, ctx=ctx, memo=memo,
-    )
-
-    for p_idx in [1, 2, 3]:
-        player = game.players[p_idx]
-        for s_idx, slot in enumerate(player.tile_stand.slots):
-            if not slot.is_hidden:
-                continue
-            red_p = compute_probabilities.probability_of_red_wire(
-                game, observer, p_idx, s_idx, probs=probs,
-            )
-            letter = chr(ord("A") + s_idx)
-            name = f"{_C.BOLD}{player.name}{_C.RESET}"
-            if red_p > 0:
-                print(
-                    f"  {name} [{_C.BOLD}{letter}{_C.RESET}]:"
-                    f" {_C.RED}⚠ {red_p:.1%} chance of RED{_C.RESET}"
-                )
-            else:
-                print(
-                    f"  {name} [{_C.BOLD}{letter}{_C.RESET}]:"
-                    f" {_C.GREEN}0% red — safe{_C.RESET}"
-                )
-    print()
-
-    # Highlight a specific risky action (reuses shared memo)
-    target_p, target_s = 1, 3  # Bob slot D (red-3.5 is here)
-    dual_prob = compute_probabilities.probability_of_dual_cut(
-        game, observer, target_p, target_s, 4,
-        ctx=ctx, memo=memo,
-    )
-    red_prob = compute_probabilities.probability_of_red_wire(
-        game, observer, target_p, target_s, probs=probs,
-    )
-    print(
-        f"  Targeting {_C.BOLD}Bob [D]{_C.RESET} with guess "
-        f"{_C.BLUE}4{_C.RESET}:"
-    )
-    print(f"    Success probability: {dual_prob:.1%}")
-    print(f"    Red wire risk:       {_C.RED}{red_prob:.1%}{_C.RESET}")
-    print()
 
 
 if __name__ == "__main__":
-    example_full_game()
-    print()
-    example_colored_god_mode()
-    print()
-    example_colored_observer()
-    print()
-    example_mid_game_probabilities()
-    print()
-    example_red_wire_probability()
+    main()

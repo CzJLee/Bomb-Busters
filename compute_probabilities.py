@@ -244,7 +244,7 @@ def _identify_info_revealed_wire(
 
 @dataclasses.dataclass
 class PositionConstraint:
-    """Sort-value constraints on a hidden slot.
+    """Sort-value constraints on a hidden or info-revealed slot.
 
     Defines the valid range of sort_values for a wire at a specific
     position on another player's stand, based on known neighboring wires.
@@ -254,11 +254,15 @@ class PositionConstraint:
         slot_index: The slot index on that player's stand.
         lower_bound: Sort value must be >= this (allows duplicates).
         upper_bound: Sort value must be <= this (allows duplicates).
+        required_color: If set, only wires of this color can occupy the
+            position (e.g., for yellow info-revealed slots where the
+            exact wire is unknown but the color is known).
     """
     player_index: int
     slot_index: int
     lower_bound: float
     upper_bound: float
+    required_color: bomb_busters.WireColor | None = None
 
     def wire_fits(self, wire: bomb_busters.Wire) -> bool:
         """Check if a wire could legally occupy this position.
@@ -267,25 +271,30 @@ class PositionConstraint:
             wire: The wire to check.
 
         Returns:
-            True if the wire's sort_value is within bounds.
+            True if the wire's sort_value is within bounds and matches
+            the required color (if any).
         """
+        if self.required_color is not None and wire.color != self.required_color:
+            return False
         return self.lower_bound <= wire.sort_value <= self.upper_bound
 
 
 def compute_position_constraints(
     game: bomb_busters.GameState, observer_index: int
 ) -> list[PositionConstraint]:
-    """Compute sort-value constraints for all hidden slots on other players' stands.
+    """Compute sort-value constraints for unknown slots on other players' stands.
 
     For each hidden slot, scans left and right to find the nearest known
-    wire (from CUT or INFO_REVEALED slots) to establish valid sort-value bounds.
+    wire (from CUT or INFO_REVEALED slots) to establish valid sort-value
+    bounds. Also includes INFO_REVEALED slots where the wire identity is
+    unknown (e.g., yellow info tokens in calculator mode).
 
     Args:
         game: The current game state.
         observer_index: The observing player's index.
 
     Returns:
-        List of PositionConstraint objects for all hidden slots on
+        List of PositionConstraint objects for all constrained slots on
         other players' stands.
     """
     constraints: list[PositionConstraint] = []
@@ -303,6 +312,24 @@ def compute_position_constraints(
                     slot_index=s_idx,
                     lower_bound=lower,
                     upper_bound=upper,
+                ))
+            elif (
+                slot.state == bomb_busters.SlotState.INFO_REVEALED
+                and slot.wire is None
+                and slot.info_token == "YELLOW"
+            ):
+                # Yellow info token in calculator mode: we know the color
+                # but not which yellow wire. Include as a constrained
+                # position so the solver assigns a yellow wire here.
+                lower, upper = bomb_busters.get_sort_value_bounds(
+                    stand.slots, s_idx,
+                )
+                constraints.append(PositionConstraint(
+                    player_index=p_idx,
+                    slot_index=s_idx,
+                    lower_bound=lower,
+                    upper_bound=upper,
+                    required_color=bomb_busters.WireColor.YELLOW,
                 ))
     return constraints
 
@@ -1275,7 +1302,7 @@ class RankedMove:
             return f"Reveal Red Wires (100%)"
         elif self.action_type == "double_detector":
             return (
-                f"DD P{self.target_player}"
+                f"Double Detector P{self.target_player}"
                 f"[{self.target_slot},{self.second_slot}]"
                 f" = {self.guessed_value}"
                 f" ({self.probability:.1%}){red}"
@@ -1294,17 +1321,26 @@ def rank_all_moves(
     observer_index: int,
     probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
     | None = None,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    include_dd: bool = False,
 ) -> list[RankedMove]:
     """Rank all possible moves by probability of success.
 
     Considers solo cuts (always 100%), reveal red (always 100% if available),
-    and all possible dual cut targets with their probabilities.
+    and all possible dual cut targets with their probabilities. Optionally
+    includes Double Detector moves for all valid slot pairs.
 
     Args:
         game: The current game state.
         observer_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
+        ctx: Pre-built solver context (needed for DD moves).
+        memo: Pre-built solver memo (needed for DD moves).
+        include_dd: If True, also enumerate Double Detector moves for
+            all pairs of hidden slots on each target player. Requires
+            ctx and memo to be provided (or they will be built).
 
     Returns:
         List of RankedMove objects sorted by probability descending.
@@ -1344,6 +1380,11 @@ def rank_all_moves(
         if slot.is_hidden and slot.wire is not None:
             observer_values.add(slot.wire.gameplay_value)
 
+    # Blue values the observer holds (DD only works with blue)
+    observer_blue_values: set[int] = {
+        v for v in observer_values if isinstance(v, int)
+    }
+
     for (p_idx, s_idx), counter in probs.items():
         total = sum(counter.values())
         if total == 0:
@@ -1374,6 +1415,48 @@ def rank_all_moves(
                     probability=prob,
                     red_probability=slot_red_prob,
                 ))
+
+    # Double Detector moves
+    if include_dd and observer_blue_values:
+        if ctx is None or memo is None:
+            solver = build_solver(game, observer_index)
+            if solver is not None:
+                ctx, memo = solver
+        if ctx is not None and memo is not None:
+            # Check DD availability
+            dd_available = (
+                player.character_card is not None
+                and player.character_card.name == "Double Detector"
+                and not player.character_card.used
+            )
+            if dd_available:
+                for p_idx in range(len(game.players)):
+                    if p_idx == observer_index:
+                        continue
+                    target_hidden = game.players[p_idx].tile_stand.hidden_slots
+                    hidden_indices = [i for i, _ in target_hidden]
+                    # Enumerate all pairs of hidden slots
+                    for a in range(len(hidden_indices)):
+                        for b in range(a + 1, len(hidden_indices)):
+                            s1 = hidden_indices[a]
+                            s2 = hidden_indices[b]
+                            for value in observer_blue_values:
+                                dd_prob = _forward_pass_dd(
+                                    ctx, memo, p_idx, s1, s2, value,
+                                )
+                                if dd_prob > 0:
+                                    dd_red = _forward_pass_red_dd(
+                                        ctx, memo, p_idx, s1, s2,
+                                    )
+                                    moves.append(RankedMove(
+                                        action_type="double_detector",
+                                        target_player=p_idx,
+                                        target_slot=s1,
+                                        second_slot=s2,
+                                        guessed_value=value,
+                                        probability=dd_prob,
+                                        red_probability=dd_red,
+                                    ))
 
     # Sort by probability descending
     moves.sort(key=lambda m: m.probability, reverse=True)
@@ -1431,7 +1514,7 @@ def _red_warning(red_prob: float, show_zero: bool = False) -> str:
     """
     if red_prob <= 0:
         if show_zero:
-            return f"  {_C.GREEN}RED 0.0%{_C.RESET}"
+            return f"  {_C.RED}RED 0.0%{_C.RESET}"
         return ""
     return f"  {_C.RED}⚠ RED {red_prob:.1%}{_C.RESET}"
 
@@ -1459,14 +1542,17 @@ def _format_move(
     red = _red_warning(move.red_probability, show_zero=show_zero_red)
 
     if move.action_type == "solo_cut":
-        return f"  {num} {prob}  Solo Cut {val}"
+        label = f"{_C.GREEN}⚡ Solo Cut{_C.RESET}"
+        return f"  {num} {prob}  {label} {val}"
     elif move.action_type == "reveal_red":
-        return f"  {num} {prob}  Reveal Red Wires"
+        label = f"{_C.RED}◆ Reveal Red Wires{_C.RESET}"
+        return f"  {num} {prob}  {label}"
     elif move.action_type == "dual_cut" and move.target_player is not None:
         target = _player_name(game, move.target_player)
         slot = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
+        label = f"{_C.BLUE}✂ Dual Cut{_C.RESET}"
         return (
-            f"  {num} {prob}  Dual Cut → {target}"
+            f"  {num} {prob}  {label} → {target}"
             f" [{_C.BOLD}{slot}{_C.RESET}] = {val}{red}"
         )
     elif (
@@ -1476,8 +1562,9 @@ def _format_move(
         target = _player_name(game, move.target_player)
         s1 = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
         s2 = _slot_letter(move.second_slot) if move.second_slot is not None else "?"
+        label = f"{_C.YELLOW}⚙ Double Detector{_C.RESET}"
         return (
-            f"  {num} {prob}  DD → {target}"
+            f"  {num} {prob}  {label} → {target}"
             f" [{_C.BOLD}{s1},{s2}{_C.RESET}] = {val}{red}"
         )
     return f"  {num} {prob}  {move}"
@@ -1488,6 +1575,7 @@ def print_probability_analysis(
     observer_index: int,
     max_moves: int = 10,
     show_progress: bool = True,
+    include_dd: bool = False,
 ) -> None:
     """Print a probability analysis for the active player.
 
@@ -1500,6 +1588,7 @@ def print_probability_analysis(
         max_moves: Maximum number of ranked moves to display.
         show_progress: If True (default), show a tqdm progress bar
             during the backward solve.
+        include_dd: If True, include Double Detector moves in ranking.
     """
     player = game.players[observer_index]
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
@@ -1514,6 +1603,8 @@ def print_probability_analysis(
     solver = build_solver(game, observer_index, show_progress=show_progress)
     if show_progress:
         print()  # Extra spacing after progress bar
+    ctx: SolverContext | None = None
+    memo: MemoDict | None = None
     if solver is not None:
         ctx, memo = solver
         probs = _forward_pass_positions(ctx, memo)
@@ -1543,15 +1634,32 @@ def print_probability_analysis(
                 f" = {_value_label(value)}"
             )
         if reveal_red:
-            print(f"    • Reveal Red Wires")
+            print("    • Reveal Red Wires")
         print()
 
     # Ranked moves
-    moves = rank_all_moves(game, observer_index, probs=probs)
+    moves = rank_all_moves(
+        game, observer_index, probs=probs,
+        ctx=ctx, memo=memo, include_dd=include_dd,
+    )
 
     if not moves:
         print(f"  {_C.DIM}No available moves.{_C.RESET}")
         return
+
+    # Deduplicate DD moves: keep only the best pair per (player, value).
+    # Without this, a single high-probability slot generates many DD
+    # entries pairing it with every other slot on the same stand.
+    seen_dd: set[tuple[int | None, int | str | None]] = set()
+    deduped: list[RankedMove] = []
+    for move in moves:
+        if move.action_type == "double_detector":
+            dd_key = (move.target_player, move.guessed_value)
+            if dd_key in seen_dd:
+                continue
+            seen_dd.add(dd_key)
+        deduped.append(move)
+    moves = deduped
 
     has_red_wires = any(
         w.color == bomb_busters.WireColor.RED for w in game.wires_in_play

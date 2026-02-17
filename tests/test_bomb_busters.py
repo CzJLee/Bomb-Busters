@@ -157,6 +157,30 @@ class TestSlot(unittest.TestCase):
         output = str(s)
         self.assertIn("5", output)
 
+    def test_yellow_info_token_display(self) -> None:
+        """Yellow info token displays as 'Y', not 'YELLOW'."""
+        # Simulation mode (wire is known)
+        s = bomb_busters.Slot(
+            wire=bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
+            state=bomb_busters.SlotState.INFO_REVEALED,
+            info_token="YELLOW",
+        )
+        plain, colored = s.value_label()
+        self.assertEqual(plain, "Y")
+        self.assertIn("Y", colored)
+        self.assertNotIn("YELLOW", colored)
+
+        # Calculator mode (wire is None)
+        s_calc = bomb_busters.Slot(
+            wire=None,
+            state=bomb_busters.SlotState.INFO_REVEALED,
+            info_token="YELLOW",
+        )
+        plain_calc, colored_calc = s_calc.value_label()
+        self.assertEqual(plain_calc, "Y")
+        self.assertIn("Y", colored_calc)
+        self.assertNotIn("YELLOW", colored_calc)
+
 
 class TestTileStand(unittest.TestCase):
     """Tests for the bomb_busters.TileStand class."""
@@ -429,7 +453,8 @@ class TestDetonator(unittest.TestCase):
         d = bomb_busters.Detonator(max_failures=4)
         d.advance()
         output = str(d)
-        self.assertIn("Mistakes remaining: 3", output)
+        self.assertIn("Mistakes remaining:", output)
+        self.assertIn("3", output)
 
 
 class TestInfoTokenPool(unittest.TestCase):
@@ -845,6 +870,64 @@ class TestDualCutExecution(unittest.TestCase):
         # Info token placed showing the real value (3)
         self.assertTrue(game.players[1].tile_stand.slots[2].is_info_revealed)
         self.assertEqual(game.players[1].tile_stand.slots[2].info_token, 3)
+
+    def test_failed_dual_cut_yellow(self) -> None:
+        """Failed dual cut on yellow wire stores 'YELLOW' info token."""
+        # P0 has yellow-3.1, P1 has yellow-5.1 at slot 1
+        # P0 guesses P1 slot 1 is YELLOW (correct — it IS yellow),
+        # but P0 also needs a yellow to cut. For a failure scenario,
+        # P0 guesses blue value 5 on P1 slot 1 (which is actually yellow).
+        hands = [
+            [
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+            ],
+            [
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 5.1),
+            ],
+            [
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+            ],
+            [
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0),
+            ],
+        ]
+        players = [
+            bomb_busters.Player(
+                name=f"P{i}",
+                tile_stand=bomb_busters.TileStand.from_wires(hands[i]),
+                character_card=bomb_busters.create_double_detector(),
+            )
+            for i in range(4)
+        ]
+        game = bomb_busters.GameState(
+            players=players,
+            detonator=bomb_busters.Detonator(max_failures=3),
+            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
+            validation_tokens=set(),
+            markers=[],
+            equipment=[],
+            history=bomb_busters.TurnHistory(),
+            wires_in_play=[w for hand in hands for w in hand],
+        )
+        # P0 guesses P1 slot 1 (yellow-5.1) is blue-5 — wrong!
+        action = game.execute_dual_cut(
+            target_player_index=1,
+            target_slot_index=1,
+            guessed_value=5,
+        )
+        self.assertEqual(action.result, bomb_busters.ActionResult.FAIL_BLUE_YELLOW)
+        self.assertEqual(game.detonator.failures, 1)
+        # Info token shows "YELLOW" (not the numeric value)
+        slot = game.players[1].tile_stand.slots[1]
+        self.assertTrue(slot.is_info_revealed)
+        self.assertEqual(slot.info_token, "YELLOW")
+        # Display should show "Y", not "YELLOW"
+        plain, _ = slot.value_label()
+        self.assertEqual(plain, "Y")
 
     def test_failed_dual_cut_red_explodes(self) -> None:
         # Create game with a red wire
