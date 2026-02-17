@@ -622,5 +622,166 @@ class TestEdgeCases(unittest.TestCase):
         self.assertLess(prob, 1.0)
 
 
+class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
+    """Verify that cutting one wire of a value doesn't exclude that value
+    from a player's remaining hidden slots.
+
+    Scenario: Player C (index 2) fails a dual cut for value 5, proving C
+    has at least one 5. Then Player D (index 3) successfully dual cuts a 5
+    on C's stand, cutting one of C's 5s. C actually has TWO 5s, so C's
+    remaining hidden slots should still allow value 5.
+    """
+
+    def _make_scenario(self) -> bomb_busters.GameState:
+        """Build the game state for the cut-doesn't-eliminate scenario.
+
+        P0 (observer): [blue-5, blue-10, blue-11, blue-12]
+        P1: [blue-1, blue-2]
+        P2 (C): [blue-5, blue-5, blue-6]  — two 5s and a 6
+        P3 (D): [blue-5, blue-8]
+        P4: [blue-3, blue-4]
+
+        Turn order: P0 → P1 → P2 → P3 → ...
+        Step 1: P0's turn — skip (not relevant, just advance).
+        We'll manually set current_player_index to orchestrate turns.
+
+        Step 1: C (P2) attempts dual cut on P1[0], guessing 5. P1[0] is
+                blue-1, so it fails. History records C tried 5 and missed.
+        Step 2: D (P3) dual cuts 5 on C (P2), targeting P2[0] (blue-5).
+                Succeeds — P2[0] and one of D's 5s are cut.
+
+        After this, C still has a hidden blue-5 at P2[1]. The solver
+        should recognize that 5 is still possible at P2[1].
+        """
+        game = _make_known_game([
+            # P0 (observer): knows own hand
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 12.0)],
+            # P1
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0)],
+            # P2 (C): two 5s and a 6
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)],
+            # P3 (D)
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
+            # P4
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+             bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)],
+        ])
+
+        # Step 1: C (P2) tries to dual cut P1[0] guessing 5.
+        # P1[0] is blue-1, so this fails. Info token placed on P1[0].
+        game.current_player_index = 2
+        game.execute_dual_cut(
+            target_player_index=1,
+            target_slot_index=0,
+            guessed_value=5,
+        )
+
+        # Step 2: D (P3) dual cuts 5 on C (P2), targeting P2[0] (blue-5).
+        # This succeeds — P2[0] and P3[0] are cut.
+        game.current_player_index = 3
+        game.execute_dual_cut(
+            target_player_index=2,
+            target_slot_index=0,
+            guessed_value=5,
+        )
+
+        return game
+
+    def test_value_still_possible_after_cut(self) -> None:
+        """After cutting one 5 on C's stand, 5 should still be possible
+        at C's remaining hidden slots."""
+        game = self._make_scenario()
+
+        # P2[0] is now CUT (blue-5), P2[1] and P2[2] are still hidden.
+        # P2[1] is actually blue-5. The solver should allow 5 there.
+        probs = compute_probabilities.compute_position_probabilities(
+            game, observer_index=0,
+        )
+
+        # P2 slot 1 should have a nonzero probability for value 5
+        key = (2, 1)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        total = sum(counter.values())
+        self.assertGreater(total, 0)
+
+        wire_5 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)
+        count_5 = counter.get(wire_5, 0)
+        self.assertGreater(
+            count_5, 0,
+            "After cutting one 5 on P2, value 5 should still be possible "
+            "at P2's remaining hidden slots (P2 had multiple 5s)",
+        )
+
+    def test_value_not_falsely_certain(self) -> None:
+        """The solver should not be 100% certain about P2[1] being 5.
+
+        Other wires from the unknown pool could also fit at that position,
+        so 5 should be possible but not guaranteed.
+        """
+        game = self._make_scenario()
+
+        probs = compute_probabilities.compute_position_probabilities(
+            game, observer_index=0,
+        )
+
+        key = (2, 1)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        total = sum(counter.values())
+
+        wire_5 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)
+        count_5 = counter.get(wire_5, 0)
+
+        # P2[1] should not be 100% certain to be 5, because other wires
+        # could also occupy that position
+        self.assertLess(
+            count_5, total,
+            "P2[1] should not be 100% certain to be 5 — other wires "
+            "from the pool could also fit there",
+        )
+
+    def test_must_have_removed_after_cut(self) -> None:
+        """The must-have constraint for value 5 on P2 should be removed
+        after one of P2's 5s is cut, since the constraint ('at least one
+        5') was satisfied by the cut wire."""
+        game = self._make_scenario()
+
+        known = compute_probabilities.extract_known_info(game, observer_index=0)
+        # P2 had a failed dual cut for 5, but has since cut a 5.
+        # The must-have constraint should be gone.
+        self.assertNotIn(
+            5,
+            known.player_must_have.get(2, set()),
+            "must_have for P2 should not include 5 after a 5 was cut",
+        )
+
+    def test_pool_still_contains_fives(self) -> None:
+        """The unknown pool should still contain blue-5 wires after the cut.
+
+        4 blue-5s total: P0 has 1 (known), P2[0] cut, P3[0] cut.
+        That accounts for 3. One blue-5 should remain in the unknown pool.
+        """
+        game = self._make_scenario()
+
+        known = compute_probabilities.extract_known_info(game, observer_index=0)
+        pool = compute_probabilities.compute_unknown_pool(known, game)
+
+        wire_5 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)
+        count_5_in_pool = sum(1 for w in pool if w == wire_5)
+        self.assertEqual(
+            count_5_in_pool, 1,
+            "One blue-5 should remain in the unknown pool (4 total minus "
+            "1 observer, 1 cut on P2, 1 cut on P3)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
