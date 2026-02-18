@@ -291,9 +291,9 @@ game = bomb_busters.GameState.create_game(
     ],
 )
 
-# Set observer perspective (Bob sees his own wires, others' hidden wires
+# Set active player perspective (Bob sees his own wires, others' hidden wires
 # are masked as '?' in display output)
-game.observer_index = 1
+game.active_player_index = 1
 print(game)
 ```
 
@@ -307,13 +307,13 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 |-----------|------|-------------|
 | `player_names` | `list[str]` | Names of all players. |
 | `stands` | `list[list[Slot]]` | List of slot lists, one per player. Each `Slot` has its state set (`HIDDEN`, `CUT`, or `INFO_REVEALED`) and `wire` set for known wires or `None` for unknown hidden wires. |
-| `detonator_failures` | `int` | Current number of detonator failures (default `0`). |
-| `validation_tokens` | `set[int] \| None` | Set of blue values (1-12) where all 4 copies have been cut. |
+| `mistakes_remaining` | `int \| None` | How many more mistakes the team can survive. Defaults to `player_count - 1` (a fresh mission). |
 | `markers` | `list[Marker] \| None` | Board markers for red/yellow wires in play. |
 | `equipment` | `list[Equipment] \| None` | Equipment cards in play. |
 | `wires_in_play` | `list[Wire] \| None` | All wire objects that were included in this mission. Required for probability calculations. |
 | `character_cards` | `list[CharacterCard \| None] \| None` | Character card for each player (or `None` per player). |
 | `history` | `TurnHistory \| None` | Optional turn history for deduction (e.g., failed dual cuts reveal the actor holds that value). |
+| `active_player_index` | `int` | Index of the player whose turn it is. Display output is rendered from this player's perspective. Defaults to `0`. |
 
 **Returns:** A `GameState` initialized from the provided partial information.
 
@@ -325,12 +325,12 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 import bomb_busters
 import compute_probabilities
 
-# 5 players, observer is player 0.
+# 5 players, active player is player 0.
 # Use TileStand.from_string() for quick entry (see below).
-# Player 0 (observer) knows their own wires: ?N for hidden, N for cut.
-# Other players' hidden wires are ? (unknown to the observer).
+# Player 0 (active player) knows their own wires: ?N for hidden, N for cut.
+# Other players' hidden wires are ? (unknown to the active player).
 
-alice = bomb_busters.TileStand.from_string("?2 3 ?5 ?7 ?9")       # observer
+alice = bomb_busters.TileStand.from_string("?2 3 ?5 ?7 ?9")       # active player
 bob   = bomb_busters.TileStand.from_string("? 4 ? i8 ?")          # partial knowledge
 charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")  # all unknown
 diana   = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
@@ -342,14 +342,12 @@ game = bomb_busters.GameState.from_partial_state(
         alice.slots, bob.slots, charlie.slots,
         diana.slots, eve.slots,
     ],
-    detonator_failures=1,
-    validation_tokens={3},          # all four blue-3 wires have been cut
+    mistakes_remaining=3,
     wires_in_play=bomb_busters.create_all_blue_wires(),
 )
-game.observer_index = 0
 
 # Use the probability engine
-moves = compute_probabilities.rank_all_moves(game, observer_index=0)
+moves = compute_probabilities.rank_all_moves(game, active_player_index=0)
 for move in moves[:5]:
     print(move)
 ```
@@ -417,33 +415,33 @@ stand = bomb_busters.TileStand.from_string("1,2,?3,4", sep=",")
 
 #### Knowledge Extraction
 
-**`KnownInfo`** — Aggregates all information visible to the observing player: their own wires, all cut wires, info tokens, validation tokens, markers, and must-have deductions from turn history.
+**`KnownInfo`** — Aggregates all information visible to the active player: their own wires, all cut wires, info tokens, validation tokens, markers, and must-have deductions from turn history.
 
-**`extract_known_info(game, observer_index)`** — Collects public + private knowledge into a `KnownInfo` object.
+**`extract_known_info(game, active_player_index)`** — Collects public + private knowledge into a `KnownInfo` object.
 
-**`compute_unknown_pool(known, game)`** — Computes the set of wires whose locations are unknown: all wires in play minus observer's wires, minus other players' cut/revealed wires.
+**`compute_unknown_pool(known, game)`** — Computes the set of wires whose locations are unknown: all wires in play minus the active player's wires, minus other players' cut/revealed wires.
 
 #### Constraint Solver
 
 **`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions). Supports a `required_color` field for slots where the wire color is known but the exact identity is not (e.g., yellow info tokens in calculator mode).
 
-**`SolverContext`** — Immutable context built once per game-state + observer via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
+**`SolverContext`** — Immutable context built once per game-state + active player via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
 
-**`build_solver(game, observer_index)`** — Builds a `SolverContext` and `MemoDict` pair. The backward solve uses composition-based enumeration (how many of each wire type per player, not per-position) with memoization at player boundaries. Optionally displays a tqdm progress bar. Call once, then pass the result to any number of forward-pass functions for instant results.
+**`build_solver(game, active_player_index)`** — Builds a `SolverContext` and `MemoDict` pair. The backward solve uses composition-based enumeration (how many of each wire type per player, not per-position) with memoization at player boundaries. Optionally displays a tqdm progress bar. Call once, then pass the result to any number of forward-pass functions for instant results.
 
-**`compute_position_probabilities(game, observer_index, ctx, memo)`** — Forward pass that computes per-position wire probability distributions from a prebuilt memo. Returns `{(player_index, slot_index): Counter({Wire: count})}`. When `ctx`/`memo` are omitted, builds them internally.
+**`compute_position_probabilities(game, active_player_index, ctx, memo)`** — Forward pass that computes per-position wire probability distributions from a prebuilt memo. Returns `{(player_index, slot_index): Counter({Wire: count})}`. When `ctx`/`memo` are omitted, builds them internally.
 
 #### High-Level API
 
 | Function | Description |
 |----------|-------------|
-| `probability_of_dual_cut(game, observer, target_player, target_slot, value)` | Probability that a specific dual cut succeeds (0.0 to 1.0) |
-| `probability_of_double_detector(game, observer, target_player, slot1, slot2, value)` | Joint probability for Double Detector (not naive independence) |
-| `probability_of_red_wire(game, observer, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
-| `probability_of_red_wire_dd(game, observer, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
-| `guaranteed_actions(game, observer)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
-| `rank_all_moves(game, observer, include_dd)` | Rank all possible moves by probability, sorted descending |
-| `print_probability_analysis(game, observer, max_moves, include_dd)` | Print a colored terminal report with guaranteed actions and ranked moves |
+| `probability_of_dual_cut(game, active_player, target_player, target_slot, value)` | Probability that a specific dual cut succeeds (0.0 to 1.0) |
+| `probability_of_double_detector(game, active_player, target_player, slot1, slot2, value)` | Joint probability for Double Detector (not naive independence) |
+| `probability_of_red_wire(game, active_player, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
+| `probability_of_red_wire_dd(game, active_player, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
+| `guaranteed_actions(game, active_player)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
+| `rank_all_moves(game, active_player, include_dd)` | Rank all possible moves by probability, sorted descending |
+| `print_probability_analysis(game, active_player, max_moves, include_dd)` | Print a colored terminal report with guaranteed actions and ranked moves |
 
 All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state.
 

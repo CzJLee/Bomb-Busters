@@ -934,7 +934,7 @@ class TestGameStatePartialState(unittest.TestCase):
         self.assertIsNotNone(game.players[0].tile_stand.slots[0].wire)
         self.assertIsNone(game.players[1].tile_stand.slots[0].wire)
 
-    def test_partial_with_detonator(self) -> None:
+    def test_partial_with_mistakes_remaining(self) -> None:
         stands = [
             [bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))],
             [bomb_busters.Slot(wire=None)],
@@ -942,11 +942,13 @@ class TestGameStatePartialState(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B"],
             stands=stands,
-            detonator_failures=2,
+            mistakes_remaining=0,
         )
-        self.assertEqual(game.detonator.failures, 2)
+        # 2 players → max_failures=1, mistakes_remaining=0 → failures=1
+        self.assertEqual(game.detonator.failures, 1)
+        self.assertEqual(game.detonator.remaining_failures, 0)
 
-    def test_partial_with_validation(self) -> None:
+    def test_partial_defaults_to_max_mistakes(self) -> None:
         stands = [
             [bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))],
             [bomb_busters.Slot(wire=None)],
@@ -954,9 +956,51 @@ class TestGameStatePartialState(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B"],
             stands=stands,
-            validation_tokens={1, 5, 9},
         )
-        self.assertEqual(game.validation_tokens, {1, 5, 9})
+        # 2 players → max_failures=1, default mistakes_remaining=1 → failures=0
+        self.assertEqual(game.detonator.failures, 0)
+        self.assertEqual(game.detonator.remaining_failures, 1)
+
+    def test_validation_tokens_computed_from_stands(self) -> None:
+        """validation_tokens is computed from cut blue wires on stands."""
+        # 4 cut blue-5 wires across two players → value 5 is validated.
+        # 2 cut blue-3 wires → value 3 is NOT validated.
+        stands = [
+            [
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+            ],
+            [
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+                    state=bomb_busters.SlotState.CUT,
+                ),
+            ],
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B"],
+            stands=stands,
+        )
+        self.assertIn(5, game.validation_tokens)
+        self.assertNotIn(3, game.validation_tokens)
 
     def test_mismatched_stands_raises(self) -> None:
         with self.assertRaises(ValueError):
@@ -996,7 +1040,7 @@ class TestDualCutExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1068,7 +1112,7 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1111,7 +1155,7 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[bomb_busters.Marker(bomb_busters.WireColor.RED, 1.5, bomb_busters.MarkerState.KNOWN)],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1178,7 +1222,7 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1221,7 +1265,7 @@ class TestDoubleDectectorExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1322,7 +1366,7 @@ class TestSoloCutExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1371,7 +1415,7 @@ class TestSoloCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1402,7 +1446,7 @@ class TestRevealRedExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1430,7 +1474,7 @@ class TestRevealRedExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1461,7 +1505,7 @@ class TestGameStateHelpers(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            validation_tokens=set(),
+
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),

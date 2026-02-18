@@ -133,22 +133,20 @@ def main() -> None:
             alice_stand, bob_stand, charlie_stand,
             diana_stand, eve_stand,
         ],
-        detonator_failures=1,
-        validation_tokens={3, 9, 12},
+        mistakes_remaining=3,
         markers=markers,
         wires_in_play=wires_in_play,
         character_cards=character_cards,
         history=history,
+        active_player_index=0,
     )
-    game.current_player_index = 0
-    game.observer_index = 0
 
     # ── Display game state ──────────────────────────────────
     print(game)
 
     # ── Probability analysis ────────────────────────────────
     compute_probabilities.print_probability_analysis(
-        game, observer_index=0, max_moves=20,
+        game, active_player_index=0, max_moves=20,
         include_dd=INCLUDE_DOUBLE_DETECTOR,
     )
 

@@ -1046,7 +1046,6 @@ class GameState:
     Attributes:
         players: List of all players in the game.
         detonator: The detonator dial tracking failures.
-        validation_tokens: Set of blue wire values (1-12) where all 4 are cut.
         markers: Board markers for red/yellow wires in play.
         equipment: List of equipment cards in the game.
         history: Record of all actions taken.
@@ -1054,13 +1053,12 @@ class GameState:
         game_over: Whether the game has ended.
         game_won: Whether the game was won (all stands empty).
         wires_in_play: All wire objects that were shuffled into the game.
-        observer_index: If set, display output is rendered from this
+        active_player_index: If set, display output is rendered from this
             player's perspective (their wires visible, others' hidden
             wires masked as '?'). If None, all wires are shown (god mode).
     """
     players: list[Player]
     detonator: Detonator
-    validation_tokens: set[int]
     markers: list[Marker]
     equipment: list[Equipment]
     history: TurnHistory
@@ -1068,7 +1066,26 @@ class GameState:
     game_over: bool = False
     game_won: bool = False
     wires_in_play: list[Wire] = dataclasses.field(default_factory=list)
-    observer_index: int | None = None
+    active_player_index: int | None = None
+
+    @property
+    def validation_tokens(self) -> set[int]:
+        """Blue wire values (1-12) where all 4 copies have been cut.
+
+        Computed from the current state of all players' stands.
+        """
+        counts: dict[int, int] = {}
+        for player in self.players:
+            for slot in player.tile_stand.slots:
+                if (
+                    slot.is_cut
+                    and slot.wire is not None
+                    and slot.wire.color == WireColor.BLUE
+                ):
+                    v = slot.wire.gameplay_value
+                    assert isinstance(v, int)
+                    counts[v] = counts.get(v, 0) + 1
+        return {v for v, c in counts.items() if c >= 4}
 
     # -----------------------------------------------------------------
     # Factory: Full Simulation Mode
@@ -1167,7 +1184,6 @@ class GameState:
         return cls(
             players=players,
             detonator=Detonator(max_failures=player_count - 1),
-            validation_tokens=set(),
             markers=markers,
             equipment=[],
             history=TurnHistory(),
@@ -1183,13 +1199,13 @@ class GameState:
         cls,
         player_names: list[str],
         stands: list[list[Slot]],
-        detonator_failures: int = 0,
-        validation_tokens: set[int] | None = None,
+        mistakes_remaining: int | None = None,
         markers: list[Marker] | None = None,
         equipment: list[Equipment] | None = None,
         wires_in_play: list[Wire] | None = None,
         character_cards: list[CharacterCard | None] | None = None,
         history: TurnHistory | None = None,
+        active_player_index: int = 0,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -1200,15 +1216,19 @@ class GameState:
             player_names: Names of all players.
             stands: List of slot lists, one per player. Each slot should
                 have its state set (HIDDEN, CUT, or INFO_REVEALED) and
-                wire set for known wires (the observer's own hand, cut
-                wires, etc.) or None for unknown hidden wires.
-            detonator_failures: Current number of detonator failures.
-            validation_tokens: Set of fully-cut blue values (1-12).
+                wire set for known wires (the active player's own hand,
+                cut wires, etc.) or None for unknown hidden wires.
+            mistakes_remaining: How many more mistakes the team can
+                survive. Defaults to ``player_count - 1`` (a fresh
+                mission).
             markers: Board markers for red/yellow wires.
             equipment: Equipment cards in play.
             wires_in_play: All wires that were included in this mission.
             character_cards: Character card for each player (or None).
             history: Optional turn history for deduction.
+            active_player_index: Index of the player whose turn it is.
+                Display output is rendered from this player's perspective
+                (their wires visible, others masked as '?'). Defaults to 0.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1230,17 +1250,23 @@ class GameState:
             for i in range(player_count)
         ]
 
+        max_failures = player_count - 1
+        if mistakes_remaining is None:
+            mistakes_remaining = max_failures
+        failures = max_failures - mistakes_remaining
+
         return cls(
             players=players,
             detonator=Detonator(
-                failures=detonator_failures,
-                max_failures=player_count - 1,
+                failures=failures,
+                max_failures=max_failures,
             ),
-            validation_tokens=validation_tokens or set(),
             markers=markers or [],
             equipment=equipment or [],
             history=history or TurnHistory(),
             wires_in_play=wires_in_play or [],
+            current_player_index=active_player_index,
+            active_player_index=active_player_index,
         )
 
     # -----------------------------------------------------------------
@@ -1612,9 +1638,7 @@ class GameState:
             self.game_won = True
 
     def _check_validation(self, value: int) -> None:
-        """Check if all 4 blue wires of a value are cut; add validation token.
-
-        Also checks and unlocks any equipment cards tied to this value.
+        """Check and unlock any equipment cards tied to this value.
 
         Args:
             value: The blue wire value to check (1-12).
@@ -1629,9 +1653,6 @@ class GameState:
                     and slot.wire.gameplay_value == value
                 ):
                     cut_count += 1
-
-        if cut_count >= 4:
-            self.validation_tokens.add(value)
 
         # Check equipment unlocking (needs 2 wires cut of unlock_value)
         pairs_cut = cut_count // 2
@@ -1819,7 +1840,7 @@ class GameState:
         # Players
         indent = "    "
         highlight_index = (
-            self.observer_index if self.observer_index is not None
+            self.active_player_index if self.active_player_index is not None
             else self.current_player_index
         )
         for i, player in enumerate(self.players):
@@ -1827,10 +1848,10 @@ class GameState:
                 lines.append(f"{_Colors.BOLD}>>> Player {i}: {player}{_Colors.RESET}")
             else:
                 lines.append(f"{indent}Player {i}: {player}")
-            # Mask hidden wires for non-observer players
+            # Mask hidden wires for non-active players
             mask = (
-                self.observer_index is not None
-                and i != self.observer_index
+                self.active_player_index is not None
+                and i != self.active_player_index
             )
             status_line, values_line, letters_line = player.tile_stand.stand_lines(
                 mask_hidden=mask,

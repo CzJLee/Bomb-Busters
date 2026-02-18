@@ -8,14 +8,15 @@ import compute_probabilities
 
 def _make_known_game(
     hands: list[list[bomb_busters.Wire]],
-    detonator_failures: int = 0,
+    mistakes_remaining: int | None = None,
     history: bomb_busters.TurnHistory | None = None,
 ) -> bomb_busters.GameState:
     """Helper to create a fully-known game from explicit hand lists.
 
     Args:
         hands: List of wire lists, one per player.
-        detonator_failures: Starting failures on the detonator.
+        mistakes_remaining: How many more mistakes the team can survive.
+            Defaults to ``len(hands) - 1`` (a fresh mission).
         history: Optional turn history.
 
     Returns:
@@ -30,13 +31,16 @@ def _make_known_game(
         for i, hand in enumerate(hands)
     ]
     all_wires = [w for hand in hands for w in hand]
+    max_failures = len(hands) - 1
+    if mistakes_remaining is None:
+        mistakes_remaining = max_failures
     return bomb_busters.GameState(
         players=players,
         detonator=bomb_busters.Detonator(
-            failures=detonator_failures,
-            max_failures=len(hands) - 1,
+            failures=max_failures - mistakes_remaining,
+            max_failures=max_failures,
         ),
-        validation_tokens=set(),
+
         markers=[],
         equipment=[],
         history=history or bomb_busters.TurnHistory(),
@@ -55,7 +59,7 @@ class TestExtractKnownInfo(unittest.TestCase):
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0), bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
         ])
         known = compute_probabilities.extract_known_info(game, 0)
-        self.assertEqual(known.observer_index, 0)
+        self.assertEqual(known.active_player_index, 0)
         self.assertEqual(len(known.observer_wires), 2)
         self.assertEqual(len(known.cut_wires), 0)
         self.assertEqual(len(known.info_revealed), 0)
@@ -701,7 +705,7 @@ class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
         # P2[0] is now CUT (blue-5), P2[1] and P2[2] are still hidden.
         # P2[1] is actually blue-5. The solver should allow 5 there.
         probs = compute_probabilities.compute_position_probabilities(
-            game, observer_index=0,
+            game, active_player_index=0,
         )
 
         # P2 slot 1 should have a nonzero probability for value 5
@@ -728,7 +732,7 @@ class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
         game = self._make_scenario()
 
         probs = compute_probabilities.compute_position_probabilities(
-            game, observer_index=0,
+            game, active_player_index=0,
         )
 
         key = (2, 1)
@@ -753,7 +757,7 @@ class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
         5') was satisfied by the cut wire."""
         game = self._make_scenario()
 
-        known = compute_probabilities.extract_known_info(game, observer_index=0)
+        known = compute_probabilities.extract_known_info(game, active_player_index=0)
         # P2 had a failed dual cut for 5, but has since cut a 5.
         # The must-have constraint should be gone.
         self.assertNotIn(
@@ -770,7 +774,7 @@ class TestCutDoesNotEliminateValueFromHiddenSlots(unittest.TestCase):
         """
         game = self._make_scenario()
 
-        known = compute_probabilities.extract_known_info(game, observer_index=0)
+        known = compute_probabilities.extract_known_info(game, active_player_index=0)
         pool = compute_probabilities.compute_unknown_pool(known, game)
 
         wire_5 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)
@@ -1445,7 +1449,7 @@ class TestBlueWireSubset(unittest.TestCase):
         """Create a game with only blue wires 1-4 (16 total), 4 players.
 
         Returns:
-            Tuple of (game, observer_index).
+            Tuple of (game, active_player_index).
         """
         blue_pool = bomb_busters.create_blue_wires(1, 4)
         # 16 wires, 4 players = 4 each
@@ -1482,7 +1486,7 @@ class TestBlueWireSubset(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(failures=0, max_failures=3),
-            validation_tokens=set(),
+    
             markers=[],
             equipment=[],
             history=bomb_busters.TurnHistory(),
@@ -1585,7 +1589,7 @@ class TestBlueWireSubset(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(failures=0, max_failures=3),
-            validation_tokens=set(),
+    
             markers=[
                 bomb_busters.Marker(
                     bomb_busters.WireColor.RED, 2.5,
@@ -1644,7 +1648,7 @@ class TestSharedMemo(unittest.TestCase):
         One red wire in play. P1 has one cut slot to create constraints.
 
         Returns:
-            Tuple of (game, observer_index).
+            Tuple of (game, active_player_index).
         """
         game = _make_known_game([
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
@@ -1677,7 +1681,7 @@ class TestSharedMemo(unittest.TestCase):
         P3: [blue-10, blue-11]
 
         Returns:
-            Tuple of (game, observer_index).
+            Tuple of (game, active_player_index).
         """
         game = _make_known_game([
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),

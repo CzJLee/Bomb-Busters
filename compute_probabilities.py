@@ -40,7 +40,7 @@ class KnownInfo:
     calculations.
 
     Attributes:
-        observer_index: Index of the observing player.
+        active_player_index: Index of the observing player.
         observer_wires: Exact wires in the observer's hand (all slots).
         cut_wires: All wires that have been cut across all players.
         info_revealed: List of (player_index, slot_index, revealed_value)
@@ -51,7 +51,7 @@ class KnownInfo:
         markers: Board markers indicating which red/yellow values are in play.
         wires_in_play: All wire objects that were shuffled into the game.
     """
-    observer_index: int
+    active_player_index: int
     observer_wires: list[bomb_busters.Wire]
     cut_wires: list[bomb_busters.Wire]
     info_revealed: list[tuple[int, int, int | str]]
@@ -62,7 +62,7 @@ class KnownInfo:
 
 
 def extract_known_info(
-    game: bomb_busters.GameState, observer_index: int
+    game: bomb_busters.GameState, active_player_index: int
 ) -> KnownInfo:
     """Extract all information visible to the observing player.
 
@@ -72,12 +72,12 @@ def extract_known_info(
 
     Args:
         game: The current game state.
-        observer_index: Index of the player whose perspective to use.
+        active_player_index: Index of the player whose perspective to use.
 
     Returns:
         A KnownInfo object with all observable information.
     """
-    observer = game.players[observer_index]
+    observer = game.players[active_player_index]
 
     # Observer's own wires (all slots, including cut ones)
     observer_wires = [
@@ -96,10 +96,10 @@ def extract_known_info(
                 info_revealed.append((p_idx, s_idx, slot.info_token))
 
     # Deductions from turn history
-    player_must_have = _compute_must_have(game, observer_index)
+    player_must_have = _compute_must_have(game, active_player_index)
 
     return KnownInfo(
-        observer_index=observer_index,
+        active_player_index=active_player_index,
         observer_wires=observer_wires,
         cut_wires=cut_wires,
         info_revealed=info_revealed,
@@ -111,7 +111,7 @@ def extract_known_info(
 
 
 def _compute_must_have(
-    game: bomb_busters.GameState, observer_index: int
+    game: bomb_busters.GameState, active_player_index: int
 ) -> dict[int, set[int | str]]:
     """Determine which values each player must still have from failed dual cuts.
 
@@ -120,7 +120,7 @@ def _compute_must_have(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
 
     Returns:
         Dict mapping player_index to set of gameplay values they must have.
@@ -177,7 +177,7 @@ def compute_unknown_pool(
     # Remove cut wires from OTHER players only
     # (observer's cut wires are already removed above)
     observer_cut_wires: list[bomb_busters.Wire] = []
-    observer = game.players[known.observer_index]
+    observer = game.players[known.active_player_index]
     for slot in observer.tile_stand.slots:
         if slot.is_cut and slot.wire is not None:
             observer_cut_wires.append(slot.wire)
@@ -280,7 +280,7 @@ class PositionConstraint:
 
 
 def compute_position_constraints(
-    game: bomb_busters.GameState, observer_index: int
+    game: bomb_busters.GameState, active_player_index: int
 ) -> list[PositionConstraint]:
     """Compute sort-value constraints for unknown slots on other players' stands.
 
@@ -291,7 +291,7 @@ def compute_position_constraints(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
 
     Returns:
         List of PositionConstraint objects for all constrained slots on
@@ -299,7 +299,7 @@ def compute_position_constraints(
     """
     constraints: list[PositionConstraint] = []
     for p_idx, player in enumerate(game.players):
-        if p_idx == observer_index:
+        if p_idx == active_player_index:
             continue
         stand = player.tile_stand
         for s_idx, slot in enumerate(stand.slots):
@@ -383,7 +383,7 @@ class SolverContext:
 
 def _setup_solver(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
 ) -> SolverContext | None:
     """Set up solver context from game state.
 
@@ -392,14 +392,14 @@ def _setup_solver(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
 
     Returns:
         A SolverContext, or None if there are no hidden positions to solve.
     """
-    known = extract_known_info(game, observer_index)
+    known = extract_known_info(game, active_player_index)
     unknown_pool = compute_unknown_pool(known, game)
-    constraints = compute_position_constraints(game, observer_index)
+    constraints = compute_position_constraints(game, active_player_index)
 
     if not constraints:
         return None
@@ -645,7 +645,7 @@ def _solve_backward(
 
 def build_solver(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     show_progress: bool = True,
 ) -> tuple[SolverContext, MemoDict] | None:
     """Build solver context and memo for a game state + observer.
@@ -656,7 +656,7 @@ def build_solver(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         show_progress: If True (default), display a tqdm progress bar
             during the backward solve.
 
@@ -664,7 +664,7 @@ def build_solver(
         A (SolverContext, MemoDict) tuple, or None if there are no
         hidden positions to solve.
     """
-    ctx = _setup_solver(game, observer_index)
+    ctx = _setup_solver(game, active_player_index)
     if ctx is None:
         return None
     memo = _solve_backward(ctx, show_progress=show_progress)
@@ -976,7 +976,7 @@ def _forward_pass_red_dd(
 
 def compute_position_probabilities(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     ctx: SolverContext | None = None,
     memo: MemoDict | None = None,
     show_progress: bool = False,
@@ -991,7 +991,7 @@ def compute_position_probabilities(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         ctx: Pre-built solver context. If None, will be computed.
         memo: Pre-built solver memo. If None, will be computed.
         show_progress: If True and memo needs building, show a tqdm
@@ -1003,7 +1003,7 @@ def compute_position_probabilities(
         at a position is count / sum(counter.values()).
     """
     if ctx is None or memo is None:
-        solver = build_solver(game, observer_index, show_progress=show_progress)
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
         if solver is None:
             return {}
         ctx, memo = solver
@@ -1017,7 +1017,7 @@ def compute_position_probabilities(
 
 def probability_of_dual_cut(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     target_player_index: int,
     target_slot_index: int,
     guessed_value: int | str,
@@ -1032,7 +1032,7 @@ def probability_of_dual_cut(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         target_player_index: Index of the target player.
         target_slot_index: Slot index on the target's stand.
         guessed_value: The value being guessed (int 1-12 or 'YELLOW').
@@ -1044,7 +1044,7 @@ def probability_of_dual_cut(
         Probability of success as a float between 0.0 and 1.0.
     """
     probs = compute_position_probabilities(
-        game, observer_index, ctx=ctx, memo=memo, show_progress=show_progress,
+        game, active_player_index, ctx=ctx, memo=memo, show_progress=show_progress,
     )
     key = (target_player_index, target_slot_index)
     if key not in probs:
@@ -1064,7 +1064,7 @@ def probability_of_dual_cut(
 
 def probability_of_double_detector(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     target_player_index: int,
     slot_index_1: int,
     slot_index_2: int,
@@ -1085,7 +1085,7 @@ def probability_of_double_detector(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         target_player_index: Index of the target player.
         slot_index_1: First slot index on the target's stand.
         slot_index_2: Second slot index on the target's stand.
@@ -1098,7 +1098,7 @@ def probability_of_double_detector(
         Probability of success as a float between 0.0 and 1.0.
     """
     if ctx is None or memo is None:
-        solver = build_solver(game, observer_index, show_progress=show_progress)
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
         if solver is None:
             return 0.0
         ctx, memo = solver
@@ -1111,7 +1111,7 @@ def probability_of_double_detector(
 
 def probability_of_red_wire(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     target_player_index: int,
     target_slot_index: int,
     probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
@@ -1124,7 +1124,7 @@ def probability_of_red_wire(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         target_player_index: Index of the target player.
         target_slot_index: Slot index on the target's stand.
         probs: Pre-computed position probabilities. If None, will be
@@ -1134,7 +1134,7 @@ def probability_of_red_wire(
         Probability of the slot containing a red wire (0.0 to 1.0).
     """
     if probs is None:
-        probs = compute_position_probabilities(game, observer_index)
+        probs = compute_position_probabilities(game, active_player_index)
     key = (target_player_index, target_slot_index)
     if key not in probs:
         return 0.0
@@ -1153,7 +1153,7 @@ def probability_of_red_wire(
 
 def probability_of_red_wire_dd(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     target_player_index: int,
     slot_index_1: int,
     slot_index_2: int,
@@ -1175,7 +1175,7 @@ def probability_of_red_wire_dd(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index.
+        active_player_index: The observing player's index.
         target_player_index: Index of the target player.
         slot_index_1: First slot index on the target's stand.
         slot_index_2: Second slot index on the target's stand.
@@ -1187,7 +1187,7 @@ def probability_of_red_wire_dd(
         Probability that both slots are red wires (0.0 to 1.0).
     """
     if ctx is None or memo is None:
-        solver = build_solver(game, observer_index, show_progress=show_progress)
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
         if solver is None:
             return 0.0
         ctx, memo = solver
@@ -1200,7 +1200,7 @@ def probability_of_red_wire_dd(
 
 def guaranteed_actions(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
     | None = None,
 ) -> dict[str, list | bool]:
@@ -1211,7 +1211,7 @@ def guaranteed_actions(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index (the active player).
+        active_player_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
 
@@ -1221,7 +1221,7 @@ def guaranteed_actions(
         - 'dual_cuts': list of (target_player, target_slot, value) tuples
         - 'reveal_red': bool indicating if reveal red action is available
     """
-    player = game.players[observer_index]
+    player = game.players[active_player_index]
     result: dict[str, list | bool] = {
         "solo_cuts": [],
         "dual_cuts": [],
@@ -1229,7 +1229,7 @@ def guaranteed_actions(
     }
 
     # Solo cuts
-    for value in game.available_solo_cuts(observer_index):
+    for value in game.available_solo_cuts(active_player_index):
         slots = [
             i for i, s in enumerate(player.tile_stand.slots)
             if s.is_hidden
@@ -1249,7 +1249,7 @@ def guaranteed_actions(
 
     # 100% probability dual cuts
     if probs is None:
-        probs = compute_position_probabilities(game, observer_index)
+        probs = compute_position_probabilities(game, active_player_index)
     for (p_idx, s_idx), counter in probs.items():
         total = sum(counter.values())
         if total == 0:
@@ -1318,7 +1318,7 @@ class RankedMove:
 
 def rank_all_moves(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
     | None = None,
     ctx: SolverContext | None = None,
@@ -1333,7 +1333,7 @@ def rank_all_moves(
 
     Args:
         game: The current game state.
-        observer_index: The observing player's index (the active player).
+        active_player_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
         ctx: Pre-built solver context (needed for DD moves).
@@ -1346,10 +1346,10 @@ def rank_all_moves(
         List of RankedMove objects sorted by probability descending.
     """
     moves: list[RankedMove] = []
-    player = game.players[observer_index]
+    player = game.players[active_player_index]
 
     # Solo cuts (guaranteed 100%)
-    for value in game.available_solo_cuts(observer_index):
+    for value in game.available_solo_cuts(active_player_index):
         moves.append(RankedMove(
             action_type="solo_cut",
             guessed_value=value,
@@ -1372,7 +1372,7 @@ def rank_all_moves(
 
     # Dual cuts: compute probabilities for all possible targets
     if probs is None:
-        probs = compute_position_probabilities(game, observer_index)
+        probs = compute_position_probabilities(game, active_player_index)
 
     # Determine which values the observer can cut (has in hand)
     observer_values: set[int | str] = set()
@@ -1419,7 +1419,7 @@ def rank_all_moves(
     # Double Detector moves
     if include_dd and observer_blue_values:
         if ctx is None or memo is None:
-            solver = build_solver(game, observer_index)
+            solver = build_solver(game, active_player_index)
             if solver is not None:
                 ctx, memo = solver
         if ctx is not None and memo is not None:
@@ -1431,7 +1431,7 @@ def rank_all_moves(
             )
             if dd_available:
                 for p_idx in range(len(game.players)):
-                    if p_idx == observer_index:
+                    if p_idx == active_player_index:
                         continue
                     target_hidden = game.players[p_idx].tile_stand.hidden_slots
                     hidden_indices = [i for i, _ in target_hidden]
@@ -1572,7 +1572,7 @@ def _format_move(
 
 def print_probability_analysis(
     game: bomb_busters.GameState,
-    observer_index: int,
+    active_player_index: int,
     max_moves: int = 10,
     show_progress: bool = True,
     include_dd: bool = False,
@@ -1584,23 +1584,23 @@ def print_probability_analysis(
 
     Args:
         game: The current game state.
-        observer_index: The player whose perspective to analyze.
+        active_player_index: The player whose perspective to analyze.
         max_moves: Maximum number of ranked moves to display.
         show_progress: If True (default), show a tqdm progress bar
             during the backward solve.
         include_dd: If True, include Double Detector moves in ranking.
     """
-    player = game.players[observer_index]
+    player = game.players[active_player_index]
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print(
         f"{_C.BOLD}Probability Analysis for "
-        f"{player.name} (Player {observer_index}){_C.RESET}"
+        f"{player.name} (Player {active_player_index}){_C.RESET}"
     )
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print()
 
     # Build solver once and share across all calls
-    solver = build_solver(game, observer_index, show_progress=show_progress)
+    solver = build_solver(game, active_player_index, show_progress=show_progress)
     if show_progress:
         print()  # Extra spacing after progress bar
     ctx: SolverContext | None = None
@@ -1612,7 +1612,7 @@ def print_probability_analysis(
         probs = {}
 
     # Guaranteed actions
-    ga = guaranteed_actions(game, observer_index, probs=probs)
+    ga = guaranteed_actions(game, active_player_index, probs=probs)
     solo_cuts: list[tuple[int | str, list[int]]] = ga["solo_cuts"]  # type: ignore[assignment]
     guaranteed_duals: list[tuple[int, int, int | str]] = ga["dual_cuts"]  # type: ignore[assignment]
     reveal_red: bool = ga["reveal_red"]  # type: ignore[assignment]
@@ -1639,7 +1639,7 @@ def print_probability_analysis(
 
     # Ranked moves
     moves = rank_all_moves(
-        game, observer_index, probs=probs,
+        game, active_player_index, probs=probs,
         ctx=ctx, memo=memo, include_dd=include_dd,
     )
 
