@@ -2221,15 +2221,23 @@ def print_indication_analysis(
         letter = _slot_letter(choice.slot_index)
         val = _value_label(choice.wire.gameplay_value)
 
-        # Color the information gain by quality
+        # Color the information gain by indication quality.
+        # Thresholds use uncertainty_resolved (%) rather than raw
+        # bits because % is normalized by baseline entropy and stable
+        # across different game sizes (blue 1-12 vs 1-8 etc.).
+        # Derived from 500 random 5-player games (blue 1-12, 0-4
+        # yellow, 0-3 red): mean ≈ 20%, std ≈ 7%.
+        #   Green:  ≥ 25%  (above mean + 1σ — excellent)
+        #   Blue:   ≥ 20%  (above mean — good)
+        #   Yellow: ≥ 13%  (above mean - 1σ — moderate)
+        #   Red:    < 13%  (below mean - 1σ — poor)
         ig = choice.information_gain
-        if ig >= 2.0:
+        pct = choice.uncertainty_resolved
+        if pct >= 0.25:
             ig_str = f"{_C.GREEN}{_C.BOLD}{ig:>5.2f}{_C.RESET}"
-        elif ig >= 1.0:
-            ig_str = f"{_C.GREEN}{ig:>5.2f}{_C.RESET}"
-        elif ig >= 0.5:
+        elif pct >= 0.20:
             ig_str = f"{_C.BLUE}{ig:>5.2f}{_C.RESET}"
-        elif ig >= 0.2:
+        elif pct >= 0.13:
             ig_str = f"{_C.YELLOW}{ig:>5.2f}{_C.RESET}"
         else:
             ig_str = f"{_C.RED}{ig:>5.2f}{_C.RESET}"
