@@ -203,7 +203,9 @@ When the game ends, a status line appears at the bottom:
 bomb_busters.py              # Game model: enums, dataclasses, game state, actions
 compute_probabilities.py     # Probability engine: constraint solver and API
 simulate.py                  # Example mid-game probability analysis
+simulate_info_token.py       # Example indication phase simulation
 docs/
+  INDICATION_QUALITY.md      # Indication quality metric documentation
   WEB_UI_ROADMAP.md          # Web UI development roadmap
   Bomb Busters Rulebook.pdf  # Official rulebook
   Bomb Busters FAQ.pdf       # Official FAQ
@@ -526,3 +528,19 @@ game = bomb_busters.GameState.from_partial_state(
 All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state.
 
 **`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, `probability`, and `red_probability` (risk of hitting a red wire).
+
+#### Indication Quality Analysis
+
+At game start, each player indicates one blue wire by placing an info token on it. This publicly reveals the wire's value and position, constraining what the remaining hidden wires could be via sort order. The indication quality analysis computes which wire to indicate for maximum information gain.
+
+**`IndicationChoice`** — Dataclass with `slot_index`, `wire`, `information_gain` (bits), `uncertainty_resolved` (fraction 0-1), and `remaining_entropy` (bits).
+
+- **Information gain (bits)**: Each bit corresponds to halving the number of equally-likely wire arrangements. An indication gaining 6 bits reduces possibilities by ~64× ($2^6$). The scale is logarithmic: 8 bits resolves 16× more uncertainty than 4 bits, not 2×.
+- **Uncertainty resolved (%)**: The fraction of total baseline uncertainty that this indication eliminates. Linear and intuitive — 30% resolved is twice as informative as 15% resolved. Use this to compare indication choices at a glance.
+
+| Function | Description |
+|----------|-------------|
+| `rank_indications(game, player_index)` | Rank all blue hidden wires by information gain (Shannon entropy reduction), sorted descending. The top choice is the recommended indication. |
+| `print_indication_analysis(game, player_index)` | Print a colored terminal report showing the player's stand, baseline entropy, and ranked indication choices with information gain in bits and percentage of uncertainty resolved. |
+
+The metric uses a dedicated single-stand two-pass DP solver. For each candidate indication, it simulates revealing the wire (tightening sort-value bounds on neighbors), then measures how much the total per-position entropy decreases. See `docs/INDICATION_QUALITY.md` for the full information-theoretic foundation.

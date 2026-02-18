@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import math
 
 import bomb_busters
 
@@ -1586,6 +1587,372 @@ def rank_all_moves(
 
 
 # =============================================================================
+# Indication Analysis
+# =============================================================================
+
+@dataclasses.dataclass
+class IndicationChoice:
+    """A ranked wire indication choice with quality metrics.
+
+    Attributes:
+        slot_index: Which slot on the stand to indicate.
+        wire: The wire at that slot.
+        information_gain: Entropy reduction in bits from indicating
+            this wire. Higher means more information revealed.
+        uncertainty_resolved: Fraction of baseline entropy resolved
+            (information_gain / baseline_entropy), between 0.0 and 1.0.
+        remaining_entropy: Total per-position entropy (bits) remaining
+            on the stand after this indication.
+    """
+    slot_index: int
+    wire: bomb_busters.Wire
+    information_gain: float
+    uncertainty_resolved: float
+    remaining_entropy: float
+
+    def __str__(self) -> str:
+        letter = chr(ord("A") + self.slot_index)
+        return (
+            f"Indicate {self.wire.base_number} at [{letter}]: "
+            f"{self.information_gain:.2f} bits "
+            f"({self.uncertainty_resolved:.1%} resolved)"
+        )
+
+
+def _build_indication_constraints(
+    slots: list[bomb_busters.Slot],
+    indicate_slot: int | None = None,
+) -> list[PositionConstraint]:
+    """Build position constraints for hidden slots on a stand.
+
+    When ``indicate_slot`` is specified, that slot is treated as
+    INFO_REVEALED (with its wire's gameplay_value as the info token),
+    and sort-value bounds for neighboring hidden slots are computed
+    from the modified state.
+
+    Args:
+        slots: The stand's slot list (indicating player's own stand).
+        indicate_slot: If set, the slot index to treat as indicated.
+
+    Returns:
+        List of PositionConstraint for each hidden slot (excluding
+        the indicated slot if any).
+    """
+    # Create a working copy with the indication applied
+    if indicate_slot is not None:
+        work_slots: list[bomb_busters.Slot] = []
+        for i, s in enumerate(slots):
+            if i == indicate_slot:
+                # Simulate the info token placement
+                work_slots.append(bomb_busters.Slot(
+                    wire=s.wire,
+                    state=bomb_busters.SlotState.INFO_REVEALED,
+                    info_token=(
+                        s.wire.gameplay_value if s.wire is not None else None
+                    ),
+                ))
+            else:
+                work_slots.append(s)
+    else:
+        work_slots = slots
+
+    constraints: list[PositionConstraint] = []
+    for i, slot in enumerate(work_slots):
+        if slot.state != bomb_busters.SlotState.HIDDEN:
+            continue
+        lower, upper = bomb_busters.get_sort_value_bounds(work_slots, i)
+        constraints.append(PositionConstraint(
+            player_index=0,
+            slot_index=i,
+            lower_bound=lower,
+            upper_bound=upper,
+        ))
+    return constraints
+
+
+def _enumerate_stand_distributions(
+    constraints: list[PositionConstraint],
+    distinct_wires: list[bomb_busters.Wire],
+    pool_counts: tuple[int, ...],
+) -> tuple[dict[int, collections.Counter[bomb_busters.Wire]], int]:
+    """Compute per-position wire distributions on a single stand.
+
+    Uses a two-pass dynamic programming approach over (wire_type,
+    position) states:
+
+    1. **Backward pass**: Computes ``f[d][pi]`` — the total
+       combinatorial weight of valid compositions that fill positions
+       ``pi..N-1`` using wire types ``d..D-1``.
+
+    2. **Forward pass**: Propagates ``g[d][pi]`` — the accumulated
+       weight reaching state ``(d, pi)`` from the root — and
+       distributes per-position wire counts using both ``g`` and
+       ``f`` values.
+
+    Complexity: O(D * N * max_k) where D = distinct wire types,
+    N = positions, max_k = max pool count per type (typically 4).
+
+    Args:
+        constraints: Position constraints for hidden slots, sorted by
+            slot_index.
+        distinct_wires: Sorted list of unique wire types in the pool.
+        pool_counts: Tuple of available counts for each distinct wire
+            type (parallel to distinct_wires).
+
+    Returns:
+        A tuple of (distributions, total_weight) where distributions
+        maps position index (within constraints) to a Counter of
+        {Wire: weighted_count}, and total_weight is the sum of all
+        composition weights.
+    """
+    num_pos = len(constraints)
+    num_types = len(distinct_wires)
+
+    if num_pos == 0:
+        return {}, 0
+
+    # Precompute max_run: for each wire type, the max consecutive
+    # positions it can fill starting from each position index.
+    max_run: list[list[int]] = []
+    for w in distinct_wires:
+        runs = [0] * (num_pos + 1)
+        for pi in range(num_pos - 1, -1, -1):
+            if constraints[pi].wire_fits(w):
+                runs[pi] = runs[pi + 1] + 1
+            else:
+                runs[pi] = 0
+        max_run.append(runs)
+
+    # ── Backward pass ──────────────────────────────────────────
+    # f[d][pi] = total weight of valid completions for positions
+    # pi..N-1 using wire types d..D-1.
+    # Transition: f[d][pi] = sum_{k=0}^{max_k} C(c_d, k) * f[d+1][pi+k]
+    f = [[0] * (num_pos + 1) for _ in range(num_types + 1)]
+    f[num_types][num_pos] = 1  # base: all types used, all positions filled
+
+    for d in range(num_types - 1, -1, -1):
+        for pi in range(num_pos, -1, -1):
+            total = 0
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            for k in range(max_k + 1):
+                total += math.comb(pool_counts[d], k) * f[d + 1][pi + k]
+            f[d][pi] = total
+
+    total_weight = f[0][0]
+    if total_weight == 0:
+        return {}, 0
+
+    # ── Forward pass ───────────────────────────────────────────
+    # g[d][pi] = accumulated weight reaching state (d, pi) from root.
+    # For each transition (d, pi) --k--> (d+1, pi+k):
+    #   contribution = g[d][pi] * C(c_d, k) * f[d+1][pi+k]
+    #   positions pi..pi+k-1 each get wire type d with this weight.
+    g = [[0] * (num_pos + 1) for _ in range(num_types + 1)]
+    g[0][0] = 1
+
+    slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
+
+    for d in range(num_types):
+        w = distinct_wires[d]
+        for pi in range(num_pos + 1):
+            if g[d][pi] == 0:
+                continue
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            for k in range(max_k + 1):
+                coeff = math.comb(pool_counts[d], k)
+                g[d + 1][pi + k] += g[d][pi] * coeff
+                if k > 0:
+                    contribution = g[d][pi] * coeff * f[d + 1][pi + k]
+                    for j in range(pi, pi + k):
+                        counter = slot_counts.get(j)
+                        if counter is None:
+                            counter = collections.Counter()
+                            slot_counts[j] = counter
+                        counter[w] += contribution
+
+    return slot_counts, total_weight
+
+
+def _compute_entropy(
+    distributions: dict[int, collections.Counter[bomb_busters.Wire]],
+    total_weight: int,
+) -> float:
+    """Compute total Shannon entropy from per-position distributions.
+
+    Args:
+        distributions: Per-position Counter of {Wire: weighted_count}.
+        total_weight: Sum of all composition weights (normalization).
+
+    Returns:
+        Total entropy in bits (sum of per-position entropies).
+        Returns 0.0 if total_weight is zero.
+    """
+    if total_weight == 0:
+        return 0.0
+
+    total_entropy = 0.0
+    for counter in distributions.values():
+        pos_entropy = 0.0
+        for count in counter.values():
+            if count > 0:
+                p = count / total_weight
+                pos_entropy -= p * math.log2(p)
+        total_entropy += pos_entropy
+    return total_entropy
+
+
+def rank_indications(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> list[IndicationChoice]:
+    """Rank all possible indication choices for a player.
+
+    For each blue wire on the player's stand, computes the information
+    gain (in bits) of indicating it. The information gain measures
+    how much the indication reduces teammates' uncertainty about the
+    remaining hidden wires on this stand.
+
+    The metric is based on Shannon entropy reduction: baseline entropy
+    (all hidden) minus remaining entropy (after indicating). See
+    ``docs/INDICATION_QUALITY.md`` for the full mathematical
+    formulation.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+
+    Returns:
+        List of IndicationChoice objects sorted by information_gain
+        descending (best indication first).
+
+    Raises:
+        ValueError: If the player's stand has unknown wires.
+    """
+    player = game.players[player_index]
+    stand = player.tile_stand
+
+    # Validate all wires are known
+    unknown = [
+        i for i, s in enumerate(stand.slots) if s.wire is None
+    ]
+    if unknown:
+        letters = ", ".join(chr(ord("A") + i) for i in unknown)
+        raise ValueError(
+            f"Cannot compute indication quality: player "
+            f"{player_index} ({player.name}) has unknown wires at "
+            f"slot(s) {letters}. All wire identities must be known."
+        )
+
+    # Build the wire pool: all wires in play represent what a generic
+    # observer considers possible for this stand. We do NOT remove the
+    # indicating player's own wires — the observer doesn't know them.
+    # We only remove publicly known wires from other stands.
+    pool = list(game.wires_in_play)
+
+    # Add uncertain wire group candidates to the pool
+    for group in game.uncertain_wire_groups:
+        pool.extend(group.candidates)
+
+    # Remove publicly known wires from other players' stands
+    for p_idx, other_player in enumerate(game.players):
+        if p_idx == player_index:
+            continue
+        for slot in other_player.tile_stand.slots:
+            if slot.state == bomb_busters.SlotState.CUT and slot.wire is not None:
+                if slot.wire in pool:
+                    pool.remove(slot.wire)
+            elif (
+                slot.state == bomb_busters.SlotState.INFO_REVEALED
+                and slot.info_token is not None
+            ):
+                # Info-revealed: the wire identity is publicly known
+                wire = _identify_info_revealed_wire(
+                    game, p_idx,
+                    other_player.tile_stand.slots.index(slot),
+                    slot.info_token,
+                )
+                if wire is not None and wire in pool:
+                    pool.remove(wire)
+
+    # Build pool statistics
+    pool_counter = collections.Counter(pool)
+    distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
+    pool_counts = tuple(pool_counter[w] for w in distinct)
+
+    # Compute baseline entropy (all positions hidden)
+    baseline_constraints = _build_indication_constraints(stand.slots)
+    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+        baseline_constraints, distinct, pool_counts,
+    )
+    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
+
+    # Evaluate each possible indication
+    choices: list[IndicationChoice] = []
+    seen_wires: set[tuple[int, float]] = set()
+
+    for s_idx, slot in enumerate(stand.slots):
+        if slot.state != bomb_busters.SlotState.HIDDEN:
+            continue
+        if slot.wire is None:
+            continue
+        # Only blue wires can be indicated
+        if slot.wire.color != bomb_busters.WireColor.BLUE:
+            continue
+
+        # Deduplicate: if we've already evaluated the same wire value
+        # at this position, skip. (Different slots with the same wire
+        # value adjacent to each other will have different constraints
+        # depending on their position, so we DO evaluate the same value
+        # at different positions — we only skip exact duplicates at the
+        # exact same slot.)
+        wire_key = (s_idx, slot.wire.sort_value)
+        if wire_key in seen_wires:
+            continue
+        seen_wires.add(wire_key)
+
+        # Build pool with this wire removed
+        after_pool_counter = collections.Counter(pool_counter)
+        wire_pool_key = slot.wire
+        if after_pool_counter[wire_pool_key] > 0:
+            after_pool_counter[wire_pool_key] -= 1
+            if after_pool_counter[wire_pool_key] == 0:
+                del after_pool_counter[wire_pool_key]
+
+        after_distinct = sorted(
+            after_pool_counter.keys(), key=lambda w: w.sort_value,
+        )
+        after_pool_counts = tuple(
+            after_pool_counter[w] for w in after_distinct
+        )
+
+        # Build constraints with this slot indicated
+        after_constraints = _build_indication_constraints(
+            stand.slots, indicate_slot=s_idx,
+        )
+        after_dist, after_weight = _enumerate_stand_distributions(
+            after_constraints, after_distinct, after_pool_counts,
+        )
+        after_entropy = _compute_entropy(after_dist, after_weight)
+
+        ig = baseline_entropy - after_entropy
+        resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
+
+        choices.append(IndicationChoice(
+            slot_index=s_idx,
+            wire=slot.wire,
+            information_gain=ig,
+            uncertainty_resolved=resolved,
+            remaining_entropy=after_entropy,
+        ))
+
+    # Sort by information gain descending
+    choices.sort(key=lambda c: c.information_gain, reverse=True)
+    return choices
+
+
+# =============================================================================
 # Terminal Display
 # =============================================================================
 
@@ -1799,3 +2166,80 @@ def print_probability_analysis(
     if remaining > 0:
         print(f"  {_C.DIM}... and {remaining} more moves{_C.RESET}")
         print()
+
+
+def print_indication_analysis(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> None:
+    """Print an indication quality analysis for a player.
+
+    Shows each possible indication choice ranked by information gain,
+    with the player's stand for context. Used at the start of a mission
+    to help decide which wire to indicate.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+    """
+    player = game.players[player_index]
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print(
+        f"{_C.BOLD}Indication Analysis for "
+        f"{player.name} (Player {player_index}){_C.RESET}"
+    )
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print()
+
+    # Show the player's stand for context
+    status_line, values_line, letters_line = player.tile_stand.stand_lines()
+    prefix = "    "
+    print(f"{prefix}{status_line}")
+    print(f"{prefix}{values_line}")
+    print(f"{prefix}{letters_line}")
+    print()
+
+    choices = rank_indications(game, player_index)
+
+    if not choices:
+        print(f"  {_C.DIM}No blue wires available to indicate.{_C.RESET}")
+        return
+
+    # Show baseline entropy
+    baseline = choices[0].remaining_entropy + choices[0].information_gain
+    print(
+        f"  {_C.DIM}Baseline uncertainty: "
+        f"{baseline:.2f} bits{_C.RESET}"
+    )
+    print()
+
+    print(f"  {_C.BOLD}Ranked indication choices:{_C.RESET}")
+    print()
+    for i, choice in enumerate(choices, 1):
+        letter = _slot_letter(choice.slot_index)
+        val = _value_label(choice.wire.gameplay_value)
+
+        # Color the information gain by quality
+        ig = choice.information_gain
+        if ig >= 2.0:
+            ig_str = f"{_C.GREEN}{_C.BOLD}{ig:>5.2f}{_C.RESET}"
+        elif ig >= 1.0:
+            ig_str = f"{_C.GREEN}{ig:>5.2f}{_C.RESET}"
+        elif ig >= 0.5:
+            ig_str = f"{_C.BLUE}{ig:>5.2f}{_C.RESET}"
+        elif ig >= 0.2:
+            ig_str = f"{_C.YELLOW}{ig:>5.2f}{_C.RESET}"
+        else:
+            ig_str = f"{_C.RED}{ig:>5.2f}{_C.RESET}"
+
+        pct = choice.uncertainty_resolved
+        pct_str = f"{pct:.1%}"
+
+        print(
+            f"  {i:>2}. {ig_str} bits  "
+            f"[{_C.BOLD}{letter}{_C.RESET}] = {val}"
+            f"  {_C.DIM}({pct_str} resolved){_C.RESET}"
+        )
+    print()

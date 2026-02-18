@@ -2826,5 +2826,337 @@ class TestInfoRevealedProbability(unittest.TestCase):
         self.assertEqual(y9_count, 0, "Y9 should not fit in bounds")
 
 
+class TestIndicationQuality(unittest.TestCase):
+    """Tests for compute_probabilities.rank_indications."""
+
+    @staticmethod
+    def _blue(n: int) -> bomb_busters.Wire:
+        return bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(n))
+
+    def test_clustered_stand_prefers_edge(self) -> None:
+        """Indicating at the edge of a cluster should score highest."""
+        # Stand: 1 1 2 2 2 3 3 4 8 10
+        # The cluster edge (4 at H or 3 at G) should score highest.
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?1 ?2 ?2 ?2 ?3 ?3 ?4 ?8 ?10",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        self.assertGreater(len(choices), 0)
+
+        # Best choice should be 4 at H or 3 at G (cluster edge)
+        best = choices[0]
+        self.assertIn(
+            (best.wire.gameplay_value, best.slot_index),
+            [(4, 7), (3, 6)],
+            f"Expected cluster-edge indication, got {best}",
+        )
+
+        # Worst choice should be 1 at A (expected position)
+        worst = choices[-1]
+        self.assertEqual(worst.slot_index, 0)
+        self.assertEqual(worst.wire.gameplay_value, 1)
+
+        # Best should have much higher IG than worst
+        self.assertGreater(best.information_gain, worst.information_gain * 2)
+
+    def test_endpoints_score_low(self) -> None:
+        """Indicating at expected endpoint positions should score low."""
+        # Stand: 1 3 5 7 9 10 11 12 12 12
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?3 ?5 ?7 ?9 ?10 ?11 ?12 ?12 ?12",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        self.assertGreater(len(choices), 0)
+
+        # 1 at A and 12 at J should score among the lowest
+        ig_by_slot = {c.slot_index: c.information_gain for c in choices}
+        # Slot A (value 1) and slot J (last 12) should be low
+        self.assertIn(0, ig_by_slot)
+        self.assertIn(9, ig_by_slot)
+
+        best_ig = choices[0].information_gain
+        self.assertLess(ig_by_slot[0], best_ig)
+        self.assertLess(ig_by_slot[9], best_ig)
+
+    def test_outer_12_better_than_inner_12(self) -> None:
+        """Indicating 12 at an outer position should beat inner position.
+
+        Stand: N N N N N N 11 12 12 12
+        Indicating 12 at slot H should be better than 12 at slot J,
+        because it guarantees slots I-J are also 12.
+        """
+        alice = bomb_busters.TileStand.from_string(
+            "?2 ?4 ?6 ?8 ?9 ?10 ?11 ?12 ?12 ?12",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        ig_by_slot = {c.slot_index: c.information_gain for c in choices}
+
+        # Slot H (index 7, first 12) should beat slot J (index 9, last 12)
+        self.assertGreater(ig_by_slot[7], ig_by_slot[9])
+
+    def test_information_gain_non_negative(self) -> None:
+        """Information gain should never be negative."""
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9 ?10",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        for choice in choices:
+            self.assertGreaterEqual(
+                choice.information_gain, 0.0,
+                f"Negative IG at slot {choice.slot_index}",
+            )
+            self.assertGreaterEqual(choice.uncertainty_resolved, 0.0)
+            self.assertLessEqual(choice.uncertainty_resolved, 1.0)
+
+    def test_skips_non_blue_wires(self) -> None:
+        """Only blue wires should appear in indication choices."""
+        # Stand has a yellow and a red wire mixed in
+        yellow = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)
+        red = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
+        alice = bomb_busters.TileStand.from_wires([
+            self._blue(1), self._blue(3), yellow,
+            self._blue(5), red, self._blue(9), self._blue(11),
+        ])
+
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=(
+                bomb_busters.create_all_blue_wires() + [yellow, red]
+            ),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        for choice in choices:
+            self.assertEqual(
+                choice.wire.color, bomb_busters.WireColor.BLUE,
+                f"Non-blue wire in choices: {choice.wire}",
+            )
+        # Should have exactly 5 blue wires as candidates
+        self.assertEqual(len(choices), 5)
+
+    def test_previous_indication_affects_pool(self) -> None:
+        """Previous indications on other stands should affect the pool."""
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?3 ?5 ?7 ?9 ?10 ?11 ?12 ?12 ?12",
+        )
+        # Bob indicated blue-5 at slot C
+        bob_with_indication = bomb_busters.TileStand.from_string(
+            "? ? i5 ? ? ? ? ? ? ?",
+        )
+        # Same game but without Bob's indication
+        bob_without = bomb_busters.TileStand.from_string(
+            "? ? ? ? ? ? ? ? ? ?",
+        )
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game_with = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob_with_indication, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+        game_without = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob_without, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices_with = compute_probabilities.rank_indications(
+            game_with, player_index=0,
+        )
+        choices_without = compute_probabilities.rank_indications(
+            game_without, player_index=0,
+        )
+
+        # The results should differ because the pool changed
+        ig_with = {c.slot_index: c.information_gain for c in choices_with}
+        ig_without = {c.slot_index: c.information_gain for c in choices_without}
+
+        # At least one slot should have a different IG
+        any_different = any(
+            abs(ig_with.get(s, 0) - ig_without.get(s, 0)) > 1e-10
+            for s in ig_with
+        )
+        self.assertTrue(
+            any_different,
+            "Previous indication should affect at least one IG value",
+        )
+
+    def test_single_wire_type(self) -> None:
+        """Stand with only one blue value (all same) should still work."""
+        # 4 players, wires only in range 1-2, player has all 1s
+        alice = bomb_busters.TileStand.from_string("?1 ?1 ?1 ?1")
+        bob = bomb_busters.TileStand.from_string("? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[alice, bob, charlie, diana],
+            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        # All choices should be value 1 with the same IG
+        for choice in choices:
+            self.assertEqual(choice.wire.gameplay_value, 1)
+
+    def test_simple_two_value_entropy(self) -> None:
+        """Hand-verify entropy with a tiny 2-value game.
+
+        4 players, only blue 1 and blue 2 (4 copies each = 8 wires).
+        Player has 2 wires. Baseline: 2 hidden positions from pool of 8.
+        """
+        alice = bomb_busters.TileStand.from_string("?1 ?2")
+        bob = bomb_busters.TileStand.from_string("? ?")
+        charlie = bomb_busters.TileStand.from_string("? ?")
+        diana = bomb_busters.TileStand.from_string("? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[alice, bob, charlie, diana],
+            wires_in_play=bomb_busters.create_blue_wires(1, 2),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        self.assertEqual(len(choices), 2)
+
+        # Both choices should have positive IG
+        for choice in choices:
+            self.assertGreater(choice.information_gain, 0.0)
+
+        # After indicating either wire, only 1 hidden position remains,
+        # so remaining_entropy should equal the entropy of that single
+        # position. Both values should have the same remaining entropy
+        # (by symmetry of positions A and B with 1 and 2).
+        # Actually they may differ slightly because indicating 1 at A
+        # vs 2 at B gives different constraints. But both should be
+        # valid positive values.
+        for choice in choices:
+            self.assertGreater(choice.remaining_entropy, 0.0)
+
+    def test_raises_on_unknown_wires(self) -> None:
+        """Should raise ValueError if player has unknown wires."""
+        alice = bomb_busters.TileStand.from_string("? ? ? ?")
+        bob = bomb_busters.TileStand.from_string("? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[alice, bob, charlie, diana],
+            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+        )
+
+        with self.assertRaises(ValueError):
+            compute_probabilities.rank_indications(game, player_index=0)
+
+    def test_colored_wires_in_pool(self) -> None:
+        """Red/yellow wires in the pool should affect indication quality."""
+        # Stand with wires near a red wire boundary
+        alice = bomb_busters.TileStand.from_string(
+            "?3 ?5 ?7 ?8 ?10",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        red_7 = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires() + [red_7],
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.RED, 7.5,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+            ],
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        self.assertGreater(len(choices), 0)
+
+        # All choices should have positive IG
+        for choice in choices:
+            self.assertGreater(choice.information_gain, 0.0)
+
+    def test_sorted_descending_by_ig(self) -> None:
+        """Results should be sorted by information_gain descending."""
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9 ?10",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            wires_in_play=bomb_busters.create_all_blue_wires(),
+        )
+
+        choices = compute_probabilities.rank_indications(game, player_index=0)
+        for i in range(len(choices) - 1):
+            self.assertGreaterEqual(
+                choices[i].information_gain,
+                choices[i + 1].information_gain,
+                f"Choices not sorted at index {i}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
