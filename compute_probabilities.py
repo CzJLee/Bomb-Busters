@@ -383,6 +383,26 @@ MemoDict = dict[tuple[int, tuple[int, ...]], MemoEntry]
 
 
 @dataclasses.dataclass
+class MCSamples:
+    """Raw per-sample wire assignments from Monte Carlo sampling.
+
+    Stores individual sample assignments and their importance weights,
+    enabling post-hoc joint probability queries (e.g., Double Detector,
+    joint red wire risk for DD).
+
+    Attributes:
+        samples: List of per-sample assignment dicts. Each dict maps
+            (player_index, slot_index) to the Wire assigned in that
+            sample. Discard player entries are excluded.
+        weights: Importance weight for each sample (parallel to
+            samples). The weight is the product of per-player
+            normalization constants from backward-guided sampling.
+    """
+    samples: list[dict[tuple[int, int], bomb_busters.Wire]]
+    weights: list[int]
+
+
+@dataclasses.dataclass
 class SolverContext:
     """Immutable context for the constraint solver.
 
@@ -819,7 +839,10 @@ def _guided_mc_sample(
     num_samples: int = 1_000,
     seed: int | None = None,
     max_attempts: int | None = None,
-) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] | None:
+) -> tuple[
+    dict[tuple[int, int], collections.Counter[bomb_busters.Wire]],
+    MCSamples,
+] | None:
     """Approximate position probabilities via backward-guided MC sampling.
 
     For each sample, processes players sequentially. For each player,
@@ -847,10 +870,10 @@ def _guided_mc_sample(
             ``num_samples * 5``.
 
     Returns:
-        Dict mapping (player_index, slot_index) to Counter of
-        {Wire: weighted_count}, matching the format of
-        _forward_pass_positions. Returns None if zero valid samples
-        were found.
+        A tuple of (aggregated_probs, mc_samples), or None if zero
+        valid samples were found. aggregated_probs maps
+        (player_index, slot_index) to Counter of {Wire: weighted_count}.
+        mc_samples holds raw per-sample assignments for joint queries.
     """
     if max_attempts is None:
         max_attempts = num_samples * 5
@@ -875,6 +898,8 @@ def _guided_mc_sample(
     must_have = ctx.must_have
 
     result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
+    raw_samples: list[dict[tuple[int, int], bomb_busters.Wire]] = []
+    raw_weights: list[int] = []
     valid_count = 0
 
     for _ in range(max_attempts):
@@ -986,6 +1011,15 @@ def _guided_mc_sample(
             continue
 
         valid_count += 1
+
+        # Store raw per-sample assignments (excluding discard slots)
+        sample_dict: dict[tuple[int, int], bomb_busters.Wire] = {}
+        for p_idx, s_idx, wire in assignments:
+            sample_dict[(p_idx, s_idx)] = wire
+        raw_samples.append(sample_dict)
+        raw_weights.append(sample_weight)
+
+        # Aggregate into marginal per-position counters
         for p_idx, s_idx, wire in assignments:
             key = (p_idx, s_idx)
             counter = result.get(key)
@@ -997,7 +1031,7 @@ def _guided_mc_sample(
     if valid_count == 0:
         return None
 
-    return result
+    return result, MCSamples(samples=raw_samples, weights=raw_weights)
 
 
 def monte_carlo_probabilities(
@@ -1046,7 +1080,136 @@ def monte_carlo_probabilities(
         seed=seed,
         max_attempts=max_attempts if max_attempts is not None else None,
     )
-    return result if result is not None else {}
+    return result[0] if result is not None else {}
+
+
+def monte_carlo_analysis(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    num_samples: int = 1_000,
+    seed: int | None = None,
+    max_attempts: int | None = None,
+) -> tuple[
+    dict[tuple[int, int], collections.Counter[bomb_busters.Wire]],
+    MCSamples | None,
+]:
+    """Run Monte Carlo sampling returning both marginals and raw samples.
+
+    Like ``monte_carlo_probabilities()``, but also returns the raw
+    per-sample assignments needed for joint probability queries
+    (Double Detector, joint red wire risk). Use ``mc_dd_probability()``
+    and ``mc_red_dd_probability()`` with the returned MCSamples.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        num_samples: Target number of valid samples (default 1,000).
+        seed: Optional random seed for reproducibility.
+        max_attempts: Maximum total attempts (including must-have
+            rejections). Defaults to ``num_samples * 5``.
+
+    Returns:
+        A tuple of (marginal_probs, mc_samples). marginal_probs is
+        the same dict as ``monte_carlo_probabilities()``. mc_samples
+        is an MCSamples object for joint queries, or None if no valid
+        samples were found.
+    """
+    ctx = _setup_solver(game, active_player_index)
+    if ctx is None:
+        return {}, None
+
+    result = _guided_mc_sample(
+        ctx,
+        num_samples=num_samples,
+        seed=seed,
+        max_attempts=max_attempts if max_attempts is not None else None,
+    )
+    if result is None:
+        return {}, None
+    return result[0], result[1]
+
+
+def mc_dd_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+    guessed_value: int | str,
+) -> float:
+    """Compute Double Detector probability from MC samples.
+
+    Calculates P(at least one of the two target slots has the guessed
+    value) using weighted self-normalized importance sampling over the
+    raw per-sample assignments.
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+        guessed_value: The value being guessed.
+
+    Returns:
+        Probability of success as a float between 0.0 and 1.0.
+    """
+    key1 = (target_player_index, slot_index_1)
+    key2 = (target_player_index, slot_index_2)
+    total_weight = 0
+    match_weight = 0
+    for sample, weight in zip(mc_samples.samples, mc_samples.weights):
+        total_weight += weight
+        wire1 = sample.get(key1)
+        wire2 = sample.get(key2)
+        if (
+            (wire1 is not None
+             and wire1.gameplay_value == guessed_value)
+            or (wire2 is not None
+                and wire2.gameplay_value == guessed_value)
+        ):
+            match_weight += weight
+    if total_weight == 0:
+        return 0.0
+    return match_weight / total_weight
+
+
+def mc_red_dd_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+) -> float:
+    """Compute joint red-wire probability for DD from MC samples.
+
+    Calculates P(both target slots are red wires) using weighted
+    self-normalized importance sampling.
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+
+    Returns:
+        Probability that both slots are red wires (0.0 to 1.0).
+    """
+    key1 = (target_player_index, slot_index_1)
+    key2 = (target_player_index, slot_index_2)
+    total_weight = 0
+    match_weight = 0
+    for sample, weight in zip(mc_samples.samples, mc_samples.weights):
+        total_weight += weight
+        wire1 = sample.get(key1)
+        wire2 = sample.get(key2)
+        if (
+            wire1 is not None
+            and wire1.color == bomb_busters.WireColor.RED
+            and wire2 is not None
+            and wire2.color == bomb_busters.WireColor.RED
+        ):
+            match_weight += weight
+    if total_weight == 0:
+        return 0.0
+    return match_weight / total_weight
 
 
 # =============================================================================
@@ -1744,6 +1907,7 @@ def rank_all_moves(
     ctx: SolverContext | None = None,
     memo: MemoDict | None = None,
     include_dd: bool = False,
+    mc_samples: MCSamples | None = None,
 ) -> list[RankedMove]:
     """Rank all possible moves by probability of success.
 
@@ -1756,11 +1920,14 @@ def rank_all_moves(
         active_player_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
-        ctx: Pre-built solver context (needed for DD moves).
-        memo: Pre-built solver memo (needed for DD moves).
+        ctx: Pre-built solver context (needed for exact DD moves).
+        memo: Pre-built solver memo (needed for exact DD moves).
         include_dd: If True, also enumerate Double Detector moves for
-            all pairs of hidden slots on each target player. Requires
-            ctx and memo to be provided (or they will be built).
+            all pairs of hidden slots on each target player. Uses
+            mc_samples if provided, otherwise ctx/memo.
+        mc_samples: Raw MC samples for joint DD probability computation.
+            When provided with ``include_dd=True``, DD probabilities are
+            computed from the MC samples instead of the exact solver.
 
     Returns:
         List of RankedMove objects sorted by probability descending.
@@ -1865,35 +2032,33 @@ def rank_all_moves(
 
     # Double Detector moves
     if include_dd and observer_blue_values:
-        if ctx is None or memo is None:
-            solver = build_solver(game, active_player_index)
-            if solver is not None:
-                ctx, memo = solver
-        if ctx is not None and memo is not None:
-            # Check DD availability
-            dd_available = (
-                player.character_card is not None
-                and player.character_card.name == "Double Detector"
-                and not player.character_card.used
-            )
-            if dd_available:
+        dd_available = (
+            player.character_card is not None
+            and player.character_card.name == "Double Detector"
+            and not player.character_card.used
+        )
+        if dd_available:
+            if mc_samples is not None:
+                # MC path: compute DD from raw per-sample assignments
                 for p_idx in range(len(game.players)):
                     if p_idx == active_player_index:
                         continue
-                    target_hidden = game.players[p_idx].tile_stand.hidden_slots
+                    target_hidden = (
+                        game.players[p_idx].tile_stand.hidden_slots
+                    )
                     hidden_indices = [i for i, _ in target_hidden]
-                    # Enumerate all pairs of hidden slots
                     for a in range(len(hidden_indices)):
                         for b in range(a + 1, len(hidden_indices)):
                             s1 = hidden_indices[a]
                             s2 = hidden_indices[b]
                             for value in observer_blue_values:
-                                dd_prob = _forward_pass_dd(
-                                    ctx, memo, p_idx, s1, s2, value,
+                                dd_prob = mc_dd_probability(
+                                    mc_samples, p_idx, s1, s2,
+                                    value,
                                 )
                                 if dd_prob > 0:
-                                    dd_red = _forward_pass_red_dd(
-                                        ctx, memo, p_idx, s1, s2,
+                                    dd_red = mc_red_dd_probability(
+                                        mc_samples, p_idx, s1, s2,
                                     )
                                     moves.append(RankedMove(
                                         action_type="double_detector",
@@ -1904,6 +2069,42 @@ def rank_all_moves(
                                         probability=dd_prob,
                                         red_probability=dd_red,
                                     ))
+            else:
+                # Exact solver path
+                if ctx is None or memo is None:
+                    solver = build_solver(game, active_player_index)
+                    if solver is not None:
+                        ctx, memo = solver
+                if ctx is not None and memo is not None:
+                    for p_idx in range(len(game.players)):
+                        if p_idx == active_player_index:
+                            continue
+                        target_hidden = (
+                            game.players[p_idx].tile_stand.hidden_slots
+                        )
+                        hidden_indices = [i for i, _ in target_hidden]
+                        for a in range(len(hidden_indices)):
+                            for b in range(a + 1, len(hidden_indices)):
+                                s1 = hidden_indices[a]
+                                s2 = hidden_indices[b]
+                                for value in observer_blue_values:
+                                    dd_prob = _forward_pass_dd(
+                                        ctx, memo, p_idx, s1, s2,
+                                        value,
+                                    )
+                                    if dd_prob > 0:
+                                        dd_red = _forward_pass_red_dd(
+                                            ctx, memo, p_idx, s1, s2,
+                                        )
+                                        moves.append(RankedMove(
+                                            action_type="double_detector",
+                                            target_player=p_idx,
+                                            target_slot=s1,
+                                            second_slot=s2,
+                                            guessed_value=value,
+                                            probability=dd_prob,
+                                            red_probability=dd_red,
+                                        ))
 
     # Sort by probability descending
     moves.sort(key=lambda m: m.probability, reverse=True)
@@ -2405,7 +2606,6 @@ def print_probability_analysis(
         show_progress: If True (default), show a tqdm progress bar
             during the backward solve.
         include_dd: If True, include Double Detector moves in ranking.
-            Ignored when Monte Carlo is used.
         mc_threshold: Hidden position count above which Monte Carlo
             is used instead of the exact solver. Defaults to
             ``MC_POSITION_THRESHOLD``. Set to 0 to always use Monte
@@ -2430,19 +2630,18 @@ def print_probability_analysis(
 
     ctx: SolverContext | None = None
     memo: MemoDict | None = None
+    mc_samples_data: MCSamples | None = None
 
     if use_mc:
-        probs = monte_carlo_probabilities(
+        probs, mc_samples_data = monte_carlo_analysis(
             game, active_player_index,
             num_samples=mc_num_samples,
         )
         print(
-            f"  {_C.DIM}(Monte Carlo: {position_count} positions,"
+            f"  {_C.DIM}(Monte Carlo: {position_count} unknown wires,"
             f" {mc_num_samples:,} samples){_C.RESET}"
         )
         print()
-        # DD is not supported in Monte Carlo mode
-        include_dd = False
     else:
         solver = build_solver(
             game, active_player_index, show_progress=show_progress,
@@ -2485,6 +2684,7 @@ def print_probability_analysis(
     moves = rank_all_moves(
         game, active_player_index, probs=probs,
         ctx=ctx, memo=memo, include_dd=include_dd,
+        mc_samples=mc_samples_data,
     )
 
     if not moves:

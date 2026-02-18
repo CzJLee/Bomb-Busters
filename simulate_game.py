@@ -378,31 +378,37 @@ def main() -> None:
         )
         use_mc = position_count > compute_probabilities.MC_POSITION_THRESHOLD
 
+        include_dd = (
+            player.character_card is not None
+            and player.character_card.name == "Double Detector"
+            and not player.character_card.used
+        )
+
         if use_mc:
             # Monte Carlo path
-            probs = compute_probabilities.monte_carlo_probabilities(
-                game, player_index, num_samples=10_000,
+            mc_num_samples = 10_000
+            probs, mc_samples = (
+                compute_probabilities.monte_carlo_analysis(
+                    game, player_index,
+                    num_samples=mc_num_samples,
+                )
             )
-            # DD is not computed in Monte Carlo mode
             moves = compute_probabilities.rank_all_moves(
                 game, player_index, probs=probs,
-                include_dd=False,
+                include_dd=include_dd,
+                mc_samples=mc_samples,
             )
             elapsed = time.perf_counter() - t0
             total_action_time += elapsed
 
             display_moves = _dedup_dd_moves(moves)[:5]
             method_label = (
-                f"Monte Carlo, {position_count} positions"
+                f"Monte Carlo, {position_count} unknown wires,"
+                f" {mc_num_samples:,} samples"
             )
 
         else:
             # Exact solver path
-            include_dd = (
-                player.character_card is not None
-                and player.character_card.name == "Double Detector"
-                and not player.character_card.used
-            )
             solver = compute_probabilities.build_solver(
                 game, player_index, show_progress=False,
             )
@@ -422,7 +428,7 @@ def main() -> None:
 
             display_moves = _dedup_dd_moves(moves)[:5]
             method_label = (
-                f"exact solver, {position_count} positions"
+                f"exact solver, {position_count} unknown wires"
             )
 
         # Display top moves

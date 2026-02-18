@@ -524,6 +524,14 @@ The exact solver becomes intractable for early-game states with many hidden posi
 
 **`monte_carlo_probabilities(game, active_player_index, num_samples, seed, max_attempts)`** — Backward-guided composition sampler with importance weighting. For each sample, processes players sequentially: builds a lightweight single-player backward DP table per player and samples a valid composition proportional to `C(c_d, k) * f[d+1][pi+k]`, guaranteeing valid ascending sequences with no dead ends. Samples are weighted by the product of per-player normalization constants (self-normalized importance sampling). Returns the same `{(player_index, slot_index): Counter({Wire: count})}` format as `compute_position_probabilities()`, so callers can switch seamlessly. Default `num_samples=1_000`. Typical throughput: 1,000–8,000 valid samples/sec depending on game stage.
 
+**`monte_carlo_analysis(game, active_player_index, num_samples, seed, max_attempts)`** — Like `monte_carlo_probabilities()` but also returns an `MCSamples` object containing raw per-sample wire assignments. This enables joint probability queries needed for Double Detector support in MC mode. Returns `(marginal_probs_dict, MCSamples | None)`.
+
+**`MCSamples`** — Dataclass holding raw per-sample wire assignments and importance weights from MC sampling. Fields: `samples` (list of `{(player_index, slot_index): Wire}` dicts, one per sample) and `weights` (importance weights parallel to samples). Used with `mc_dd_probability()` and `mc_red_dd_probability()` for joint probability queries.
+
+**`mc_dd_probability(mc_samples, target_player, slot1, slot2, guessed_value)`** — Compute Double Detector probability from MC samples: P(at least one target slot has the guessed value). Uses weighted self-normalized importance sampling over raw per-sample assignments.
+
+**`mc_red_dd_probability(mc_samples, target_player, slot1, slot2)`** — Compute joint red wire probability from MC samples: P(both target slots are red). Used to assess DD red-wire risk in MC mode.
+
 #### High-Level API
 
 | Function | Description |
@@ -533,10 +541,13 @@ The exact solver becomes intractable for early-game states with many hidden posi
 | `probability_of_red_wire(game, active_player, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
 | `probability_of_red_wire_dd(game, active_player, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
 | `guaranteed_actions(game, active_player)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
-| `rank_all_moves(game, active_player, include_dd)` | Rank all possible moves by probability, sorted descending |
+| `rank_all_moves(game, active_player, include_dd, mc_samples)` | Rank all possible moves by probability, sorted descending |
 | `print_probability_analysis(game, active_player, max_moves, include_dd)` | Print a colored terminal report with guaranteed actions and ranked moves |
+| `monte_carlo_analysis(game, active_player, num_samples)` | MC sampling returning both marginal probs and raw `MCSamples` for DD |
+| `mc_dd_probability(mc_samples, target_player, slot1, slot2, value)` | Double Detector probability from MC samples |
+| `mc_red_dd_probability(mc_samples, target_player, slot1, slot2)` | Joint red-wire probability for DD from MC samples |
 
-All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state.
+All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state. `rank_all_moves` also accepts `mc_samples` for DD computation in Monte Carlo mode.
 
 **`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, `probability`, and `red_probability` (risk of hitting a red wire).
 

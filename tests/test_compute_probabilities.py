@@ -3698,10 +3698,11 @@ class TestMCGuidedSampler(unittest.TestCase):
         # Get the raw MC result and verify ordering
         ctx = compute_probabilities._setup_solver(game, 0)
         self.assertIsNotNone(ctx)
-        result = compute_probabilities._guided_mc_sample(
+        guided_result = compute_probabilities._guided_mc_sample(
             ctx, num_samples=100, seed=42,
         )
-        self.assertIsNotNone(result)
+        self.assertIsNotNone(guided_result)
+        result, _ = guided_result
 
         # For each position, verify that only wires with sort_value
         # >= lower bound and <= upper bound appear
@@ -3792,6 +3793,164 @@ class TestCountHiddenPositions(unittest.TestCase):
         self.assertEqual(
             compute_probabilities.count_hidden_positions(game, 0), 8,
         )
+
+
+class TestMCDoubleDetector(unittest.TestCase):
+    """Tests for Double Detector probability via Monte Carlo samples."""
+
+    def test_mc_dd_matches_exact(self) -> None:
+        """MC DD probability should approximate exact solver within 5%."""
+        # 4 players, blue 1-4 only (16 wires, 4 per player)
+        # P0 observer, P1-P3 have 4 hidden each = 12 positions
+        hands = [
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+        ]
+        game = _make_known_game(hands)
+
+        # Exact DD
+        solver = compute_probabilities.build_solver(
+            game, 0, show_progress=False,
+        )
+        self.assertIsNotNone(solver)
+        ctx, memo = solver
+
+        # MC DD
+        probs, mc_samples = compute_probabilities.monte_carlo_analysis(
+            game, 0, num_samples=50_000, seed=12345,
+        )
+        self.assertIsNotNone(mc_samples)
+
+        # Test DD on P1 slots 0,1 for values 1-4
+        for value in range(1, 5):
+            exact_prob = compute_probabilities.probability_of_double_detector(
+                game, 0, 1, 0, 1, value, ctx=ctx, memo=memo,
+            )
+            mc_prob = compute_probabilities.mc_dd_probability(
+                mc_samples, 1, 0, 1, value,
+            )
+            self.assertAlmostEqual(
+                exact_prob, mc_prob, delta=0.05,
+                msg=(
+                    f"DD P1[0,1]={value}: "
+                    f"exact={exact_prob:.4f} mc={mc_prob:.4f}"
+                ),
+            )
+
+    def test_mc_red_dd_matches_exact(self) -> None:
+        """MC red DD probability should approximate exact solver."""
+        # Game with 2 red wires so P(both red) may be > 0
+        blue = bomb_busters.WireColor.BLUE
+        red = bomb_busters.WireColor.RED
+        hands = [
+            [bomb_busters.Wire(blue, 1.0),
+             bomb_busters.Wire(blue, 6.0)],
+            [bomb_busters.Wire(red, 3.5),
+             bomb_busters.Wire(red, 5.5),
+             bomb_busters.Wire(blue, 8.0)],
+            [bomb_busters.Wire(blue, 3.0),
+             bomb_busters.Wire(blue, 4.0),
+             bomb_busters.Wire(blue, 5.0)],
+            [bomb_busters.Wire(blue, 2.0),
+             bomb_busters.Wire(blue, 7.0),
+             bomb_busters.Wire(blue, 9.0)],
+        ]
+        all_wires = [w for h in hands for w in h]
+        stands = [
+            bomb_busters.TileStand.from_wires(h) for h in hands
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=all_wires,
+            active_player_index=0,
+        )
+
+        # Exact
+        solver = compute_probabilities.build_solver(
+            game, 0, show_progress=False,
+        )
+        self.assertIsNotNone(solver)
+        ctx, memo = solver
+        exact_red = compute_probabilities.probability_of_red_wire_dd(
+            game, 0, 1, 0, 1, ctx=ctx, memo=memo,
+        )
+
+        # MC
+        _, mc_samples = compute_probabilities.monte_carlo_analysis(
+            game, 0, num_samples=50_000, seed=42,
+        )
+        self.assertIsNotNone(mc_samples)
+        mc_red = compute_probabilities.mc_red_dd_probability(
+            mc_samples, 1, 0, 1,
+        )
+
+        self.assertAlmostEqual(
+            exact_red, mc_red, delta=0.05,
+            msg=f"Red DD: exact={exact_red:.4f} mc={mc_red:.4f}",
+        )
+
+    def test_mc_dd_integrated_in_rank_all_moves(self) -> None:
+        """rank_all_moves with mc_samples should include DD moves."""
+        hands = [
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3, 4]],
+        ]
+        game = _make_known_game(hands)
+
+        probs, mc_samples = compute_probabilities.monte_carlo_analysis(
+            game, 0, num_samples=10_000, seed=42,
+        )
+        moves = compute_probabilities.rank_all_moves(
+            game, 0, probs=probs,
+            include_dd=True,
+            mc_samples=mc_samples,
+        )
+        dd_moves = [m for m in moves if m.action_type == "double_detector"]
+        self.assertGreater(
+            len(dd_moves), 0,
+            "rank_all_moves with mc_samples should include DD moves",
+        )
+
+    def test_mc_samples_deterministic(self) -> None:
+        """Same seed produces identical MCSamples."""
+        hands = [
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3]],
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(v))
+             for v in [1, 2, 3]],
+        ]
+        game = _make_known_game(hands)
+
+        _, samples1 = compute_probabilities.monte_carlo_analysis(
+            game, 0, num_samples=100, seed=42,
+        )
+        _, samples2 = compute_probabilities.monte_carlo_analysis(
+            game, 0, num_samples=100, seed=42,
+        )
+
+        self.assertIsNotNone(samples1)
+        self.assertIsNotNone(samples2)
+        self.assertEqual(len(samples1.samples), len(samples2.samples))
+        self.assertEqual(samples1.weights, samples2.weights)
+        for s1, s2 in zip(samples1.samples, samples2.samples):
+            self.assertEqual(s1, s2)
 
 
 if __name__ == "__main__":
