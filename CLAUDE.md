@@ -27,7 +27,7 @@ The probability engine in @compute_probabilities.py computes the following from 
 - **Double Detector probability**: Joint probability that at least one of two target slots matches the guessed value (computed from enumerated distributions, not naive independence).
 - **Red wire risk**: Per-slot probability that a target contains a red wire (instant game-over if cut). For Double Detector, computes joint probability that both target slots are red. Integrated into `RankedMove` as `red_probability` and displayed as a warning in terminal output.
 - **Equipment modifications**: The engine accepts the full game state including equipment, so future equipment that modifies cut rules can be integrated.
-- **Monte Carlo fallback**: When the exact solver is too slow (>22 hidden positions), `monte_carlo_probabilities()` uses backward-guided composition sampling with importance weighting. For each sample, it processes players sequentially, building a lightweight single-player backward DP table per player and sampling a valid composition from it — guaranteeing valid ascending sequences with no dead ends. Returns the same format as the exact solver for seamless downstream use. Auto-switching is built into `print_probability_analysis()` via `MC_POSITION_THRESHOLD`. Double Detector probabilities are supported in MC mode via `monte_carlo_analysis()`, which returns raw per-sample assignments alongside marginal distributions — enabling joint probability queries through `mc_dd_probability()` and `mc_red_dd_probability()`.
+- **Monte Carlo fallback**: When the exact solver is too slow (>22 hidden positions), `monte_carlo_probabilities()` uses backward-guided composition sampling with importance weighting. For each sample, it processes players sequentially, building a lightweight single-player backward DP table per player and sampling a valid composition from it — guaranteeing valid ascending sequences with no dead ends. Returns the same format as the exact solver for seamless downstream use. Auto-switching is built into `print_probability_analysis()` via `MC_POSITION_THRESHOLD`. Double Detector probabilities are supported in MC mode via `monte_carlo_analysis()`, which returns raw per-sample assignments alongside marginal distributions — enabling joint probability queries through `mc_dd_probability()` and `mc_red_dd_probability()`. See @docs/EXACT_SOLVER.md and @docs/MONTE_CARLO_SOLVER.md for detailed algorithm documentation.
 - **Indication quality analysis**: At game start, each player indicates one blue wire. `rank_indications()` computes which wire to indicate for maximum information gain using Shannon entropy reduction. See @docs/INDICATION_QUALITY.md for the information-theoretic foundation.
 
 ## Architecture
@@ -35,7 +35,7 @@ The probability engine in @compute_probabilities.py computes the following from 
 ### Repository layout
 
 - Python source files stay flat at the repo root for trivial imports and Pyodide compatibility. Do not nest them into a package unless the file count clearly warrants it.
-- `docs/` — Documentation (PDFs, roadmap). Reference with `@docs/` prefix.
+- `docs/` — Documentation (PDFs, algorithm docs, roadmap). Reference with `@docs/` prefix. Key algorithm docs: @docs/EXACT_SOLVER.md (exact constraint solver), @docs/MONTE_CARLO_SOLVER.md (MC fallback solver), @docs/INDICATION_QUALITY.md (indication quality metric).
 - `tests/` — Unit tests (unittest).
 - `web/` — Future browser-based UI (see @docs/WEB_UI_ROADMAP.md).
 

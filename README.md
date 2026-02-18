@@ -206,6 +206,8 @@ simulate.py                  # Example mid-game probability analysis
 simulate_info_token.py       # Example indication phase simulation
 simulate_game.py             # Full mission simulation (indication + cutting phases)
 docs/
+  EXACT_SOLVER.md            # Exact constraint solver algorithm documentation
+  MONTE_CARLO_SOLVER.md      # Monte Carlo solver algorithm documentation
   INDICATION_QUALITY.md      # Indication quality metric documentation
   WEB_UI_ROADMAP.md          # Web UI development roadmap
   Bomb Busters Rulebook.pdf  # Official rulebook
@@ -506,6 +508,8 @@ game = bomb_busters.GameState.from_partial_state(
 
 #### Constraint Solver
 
+The exact solver uses composition-based enumeration with memoization at player boundaries to compute precise probability distributions. See `docs/EXACT_SOLVER.md` for the full algorithm documentation.
+
 **`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions). Supports a `required_color` field for slots where the wire color is known but the exact identity is not (e.g., yellow info tokens in calculator mode).
 
 **`SolverContext`** — Immutable context built once per game-state + active player via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
@@ -516,7 +520,7 @@ game = bomb_busters.GameState.from_partial_state(
 
 #### Monte Carlo Fallback
 
-The exact solver becomes intractable for early-game states with many hidden positions (>22). A Monte Carlo sampler provides approximate probabilities when the exact solver would be too slow.
+The exact solver becomes intractable for early-game states with many hidden positions (>22). A Monte Carlo sampler provides approximate probabilities when the exact solver would be too slow. See `docs/MONTE_CARLO_SOLVER.md` for the full algorithm documentation.
 
 **`MC_POSITION_THRESHOLD`** — Module-level constant (default `22`). When `count_hidden_positions()` exceeds this, `print_probability_analysis()` automatically uses Monte Carlo instead of the exact solver.
 
