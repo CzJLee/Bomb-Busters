@@ -306,7 +306,7 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `player_names` | `list[str]` | Names of all players. |
-| `stands` | `list[list[Slot]]` | List of slot lists, one per player. Each `Slot` has its state set (`HIDDEN`, `CUT`, or `INFO_REVEALED`) and `wire` set for known wires or `None` for unknown hidden wires. |
+| `stands` | `list[TileStand]` | List of `TileStand` objects, one per player. Use `TileStand.from_string()` for quick entry or build manually with `TileStand(slots=[...])`. |
 | `mistakes_remaining` | `int \| None` | How many more mistakes the team can survive. Defaults to `player_count - 1` (a fresh mission). |
 | `markers` | `list[Marker] \| None` | Board markers for red/yellow wires in play. |
 | `equipment` | `list[Equipment] \| None` | Equipment cards in play. |
@@ -338,10 +338,7 @@ eve     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
 
 game = bomb_busters.GameState.from_partial_state(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-    stands=[
-        alice.slots, bob.slots, charlie.slots,
-        diana.slots, eve.slots,
-    ],
+    stands=[alice, bob, charlie, diana, eve],
     mistakes_remaining=3,
     wires_in_play=bomb_busters.create_all_blue_wires(),
 )
@@ -400,10 +397,10 @@ bob = bomb_busters.TileStand.from_string("1 3 ? ? ? 8 9 ? ? 12")
 # Stand with an info token from a failed dual cut
 diana = bomb_busters.TileStand.from_string("2 3 ? ? i6 ? ? 9 ? 11")
 
-# Use with from_partial_state (extract .slots for the stands parameter)
+# Use with from_partial_state
 game = bomb_busters.GameState.from_partial_state(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-    stands=[alice.slots, bob.slots, ...],
+    stands=[alice, bob, ...],
     wires_in_play=bomb_busters.create_all_blue_wires(),
 )
 

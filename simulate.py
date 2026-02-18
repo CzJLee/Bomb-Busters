@@ -101,17 +101,17 @@ def main() -> None:
     # Dual cut values: 4, YELLOW, 6, 7
     alice_stand = bomb_busters.TileStand.from_string(
         "1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12", num_tiles=11,
-    ).slots
+    )
 
     # Bob (P1) — 5 cut, 5 hidden (unknown to Alice)
     bob_stand = bomb_busters.TileStand.from_string(
         "1 3 ? ? ? 8 9 ? ? 12", num_tiles=10,
-    ).slots
+    )
 
     # Charlie (P2) — 5 cut, 5 hidden (unknown to Alice)
     charlie_stand = bomb_busters.TileStand.from_string(
         "2 3 ? ? ? 8 9 ? ? 12", num_tiles=10,
-    ).slots
+    )
 
     # Diana (P3) — 4 cut, 1 info-revealed, 5 hidden
     # Slot E has an info token showing blue-6 (from Eve's
@@ -119,12 +119,12 @@ def main() -> None:
     # The red wire R5.5 lurks in slot D (unknown to Alice).
     diana_stand = bomb_busters.TileStand.from_string(
         "2 3 ? ? i6 ? ? 9 ? 11", num_tiles=10,
-    ).slots
+    )
 
     # Eve (P4) — 3 cut, 7 hidden (unknown to Alice)
     eve_stand = bomb_busters.TileStand.from_string(
         "1 ? ? 3 ? ? ? ? ? 12", num_tiles=10,
-    ).slots
+    )
 
     # ── Create game state ───────────────────────────────────
     game = bomb_busters.GameState.from_partial_state(

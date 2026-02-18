@@ -1198,7 +1198,7 @@ class GameState:
     def from_partial_state(
         cls,
         player_names: list[str],
-        stands: list[list[Slot]],
+        stands: list[TileStand],
         mistakes_remaining: int | None = None,
         markers: list[Marker] | None = None,
         equipment: list[Equipment] | None = None,
@@ -1214,10 +1214,9 @@ class GameState:
 
         Args:
             player_names: Names of all players.
-            stands: List of slot lists, one per player. Each slot should
-                have its state set (HIDDEN, CUT, or INFO_REVEALED) and
-                wire set for known wires (the active player's own hand,
-                cut wires, etc.) or None for unknown hidden wires.
+            stands: List of TileStand objects, one per player. Use
+                ``TileStand.from_string()`` for quick entry or build
+                manually with ``TileStand(slots=[...])``.
             mistakes_remaining: How many more mistakes the team can
                 survive. Defaults to ``player_count - 1`` (a fresh
                 mission).
@@ -1244,7 +1243,7 @@ class GameState:
         players = [
             Player(
                 name=player_names[i],
-                tile_stand=TileStand(slots=stands[i]),
+                tile_stand=stands[i],
                 character_card=cards[i] if i < len(cards) else None,
             )
             for i in range(player_count)

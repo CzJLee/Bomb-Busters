@@ -552,19 +552,19 @@ class TestCalculatorMode(unittest.TestCase):
         """
         stands = [
             # P0: knows own hand
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)),
-            ],
+            ]),
             # P1: one cut, one hidden
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0), state=bomb_busters.SlotState.CUT),
                 bomb_busters.Slot(wire=None),  # Unknown
-            ],
+            ]),
             # P2: both hidden
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
             # P3: both hidden
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
         all_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 9)]
         game = bomb_busters.GameState.from_partial_state(
@@ -1052,20 +1052,24 @@ class TestProbabilityOfRedWire(unittest.TestCase):
 
         stands = [
             # P0: knows own hand
-            [bomb_busters.Slot(
-                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
-             bomb_busters.Slot(
-                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0))],
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0)),
+            ]),
             # P1: one cut, two hidden
-            [bomb_busters.Slot(
-                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-                state=bomb_busters.SlotState.CUT),
-             bomb_busters.Slot(wire=None),
-             bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                    state=bomb_busters.SlotState.CUT),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
             # P2: two hidden
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
             # P3: one hidden
-            [bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
@@ -1140,22 +1144,26 @@ class TestProbabilityOfRedWire(unittest.TestCase):
 
         stands = [
             # P0 (observer)
-            [bomb_busters.Slot(
-                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
-             bomb_busters.Slot(
-                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0))],
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
             # P1: [CUT-2, HIDDEN, CUT-5]
-            [bomb_busters.Slot(
-                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
-                state=bomb_busters.SlotState.CUT),
-             bomb_busters.Slot(wire=None),
-             bomb_busters.Slot(
-                 wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
-                 state=bomb_busters.SlotState.CUT)],
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                    state=bomb_busters.SlotState.CUT),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT),
+            ]),
             # P2: [HIDDEN]
-            [bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
             # P3: [HIDDEN]
-            [bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
@@ -1929,16 +1937,16 @@ class TestYellowInfoRevealed(unittest.TestCase):
         """
         stands = [
             # P0: knows own hand
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
                 ),
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0),
                 ),
-            ],
+            ]),
             # P1: cut blue-2, info-revealed yellow (unknown), hidden
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
                     state=bomb_busters.SlotState.CUT,
@@ -1949,11 +1957,11 @@ class TestYellowInfoRevealed(unittest.TestCase):
                     info_token="YELLOW",
                 ),
                 bomb_busters.Slot(wire=None),
-            ],
+            ]),
             # P2: both hidden
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
             # P3: both hidden
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
         all_wires = (
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 9)]
@@ -1999,22 +2007,22 @@ class TestYellowInfoRevealed(unittest.TestCase):
         and once forced into the info-revealed slot).
         """
         stands = [
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
                 ),
-            ],
+            ]),
             # P1: info-revealed yellow, one hidden
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=None,
                     state=bomb_busters.SlotState.INFO_REVEALED,
                     info_token="YELLOW",
                 ),
                 bomb_busters.Slot(wire=None),
-            ],
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
-            [bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)],
+            ]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
         all_wires = (
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 8)]

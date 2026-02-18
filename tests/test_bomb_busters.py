@@ -916,15 +916,15 @@ class TestGameStatePartialState(unittest.TestCase):
     def test_basic_partial_state(self) -> None:
         stands = [
             # bomb_busters.Player 0 (observer): knows own wires
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)),
-            ],
+            ]),
             # bomb_busters.Player 1: one hidden, one cut
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(wire=None),
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0), state=bomb_busters.SlotState.CUT),
-            ],
+            ]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "Them"],
@@ -936,8 +936,8 @@ class TestGameStatePartialState(unittest.TestCase):
 
     def test_partial_with_mistakes_remaining(self) -> None:
         stands = [
-            [bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))],
-            [bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B"],
@@ -950,8 +950,8 @@ class TestGameStatePartialState(unittest.TestCase):
 
     def test_partial_defaults_to_max_mistakes(self) -> None:
         stands = [
-            [bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))],
-            [bomb_busters.Slot(wire=None)],
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B"],
@@ -966,7 +966,7 @@ class TestGameStatePartialState(unittest.TestCase):
         # 4 cut blue-5 wires across two players → value 5 is validated.
         # 2 cut blue-3 wires → value 3 is NOT validated.
         stands = [
-            [
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
                     state=bomb_busters.SlotState.CUT,
@@ -979,8 +979,8 @@ class TestGameStatePartialState(unittest.TestCase):
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
                     state=bomb_busters.SlotState.CUT,
                 ),
-            ],
-            [
+            ]),
+            bomb_busters.TileStand(slots=[
                 bomb_busters.Slot(
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
                     state=bomb_busters.SlotState.CUT,
@@ -993,7 +993,7 @@ class TestGameStatePartialState(unittest.TestCase):
                     wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
                     state=bomb_busters.SlotState.CUT,
                 ),
-            ],
+            ]),
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B"],
@@ -1006,7 +1006,7 @@ class TestGameStatePartialState(unittest.TestCase):
         with self.assertRaises(ValueError):
             bomb_busters.GameState.from_partial_state(
                 player_names=["A", "B"],
-                stands=[[bomb_busters.Slot(wire=None)]],  # Only 1 stand for 2 players
+                stands=[bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)])],  # Only 1 stand for 2 players
             )
 
 
