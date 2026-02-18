@@ -27,6 +27,7 @@ The probability engine in @compute_probabilities.py computes the following from 
 - **Double Detector probability**: Joint probability that at least one of two target slots matches the guessed value (computed from enumerated distributions, not naive independence).
 - **Red wire risk**: Per-slot probability that a target contains a red wire (instant game-over if cut). For Double Detector, computes joint probability that both target slots are red. Integrated into `RankedMove` as `red_probability` and displayed as a warning in terminal output.
 - **Equipment modifications**: The engine accepts the full game state including equipment, so future equipment that modifies cut rules can be integrated.
+- **Monte Carlo fallback**: When the exact solver is too slow (>22 hidden positions), `monte_carlo_probabilities()` uses backward-guided composition sampling with importance weighting. For each sample, it processes players sequentially, building a lightweight single-player backward DP table per player and sampling a valid composition from it — guaranteeing valid ascending sequences with no dead ends. Returns the same format as the exact solver for seamless downstream use. Auto-switching is built into `print_probability_analysis()` via `MC_POSITION_THRESHOLD`.
 - **Indication quality analysis**: At game start, each player indicates one blue wire. `rank_indications()` computes which wire to indicate for maximum information gain using Shannon entropy reduction. See @docs/INDICATION_QUALITY.md for the information-theoretic foundation.
 
 ## Architecture
@@ -41,7 +42,7 @@ The probability engine in @compute_probabilities.py computes the following from 
 ### Key modules
 
 - @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `WireConfig`, `UncertainWireGroup`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
-- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping and discard slots for uncertain (X of Y) wires, indication quality analysis (`rank_indications`, `print_indication_analysis`), and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
+- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping and discard slots for uncertain (X of Y) wires, Monte Carlo fallback (`monte_carlo_probabilities`, `count_hidden_positions`, `MC_POSITION_THRESHOLD`), indication quality analysis (`rank_indications`, `print_indication_analysis`), and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
 

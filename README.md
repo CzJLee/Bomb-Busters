@@ -204,6 +204,7 @@ bomb_busters.py              # Game model: enums, dataclasses, game state, actio
 compute_probabilities.py     # Probability engine: constraint solver and API
 simulate.py                  # Example mid-game probability analysis
 simulate_info_token.py       # Example indication phase simulation
+simulate_game.py             # Full mission simulation (indication + cutting phases)
 docs/
   INDICATION_QUALITY.md      # Indication quality metric documentation
   WEB_UI_ROADMAP.md          # Web UI development roadmap
@@ -509,9 +510,19 @@ game = bomb_busters.GameState.from_partial_state(
 
 **`SolverContext`** — Immutable context built once per game-state + active player via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
 
-**`build_solver(game, active_player_index)`** — Builds a `SolverContext` and `MemoDict` pair. The backward solve uses composition-based enumeration (how many of each wire type per player, not per-position) with memoization at player boundaries. Optionally displays a tqdm progress bar. Call once, then pass the result to any number of forward-pass functions for instant results.
+**`build_solver(game, active_player_index)`** — Builds a `SolverContext` and `MemoDict` pair. The backward solve uses composition-based enumeration (how many of each wire type per player, not per-position) weighted by combinatorial coefficients `∏ C(c_d, k_d)` to correctly account for the multivariate hypergeometric distribution, with memoization at player boundaries. Optionally displays a tqdm progress bar. Call once, then pass the result to any number of forward-pass functions for instant results.
 
 **`compute_position_probabilities(game, active_player_index, ctx, memo)`** — Forward pass that computes per-position wire probability distributions from a prebuilt memo. Returns `{(player_index, slot_index): Counter({Wire: count})}`. When `ctx`/`memo` are omitted, builds them internally.
+
+#### Monte Carlo Fallback
+
+The exact solver becomes intractable for early-game states with many hidden positions (>22). A Monte Carlo sampler provides approximate probabilities when the exact solver would be too slow.
+
+**`MC_POSITION_THRESHOLD`** — Module-level constant (default `22`). When `count_hidden_positions()` exceeds this, `print_probability_analysis()` automatically uses Monte Carlo instead of the exact solver.
+
+**`count_hidden_positions(game, active_player_index)`** — Counts hidden + uncertain-info-revealed positions on other players' stands, plus discard positions from uncertain wire groups. Lightweight — no solver setup needed. Used by callers to decide between exact and Monte Carlo.
+
+**`monte_carlo_probabilities(game, active_player_index, num_samples, seed, max_attempts)`** — Backward-guided composition sampler with importance weighting. For each sample, processes players sequentially: builds a lightweight single-player backward DP table per player and samples a valid composition proportional to `C(c_d, k) * f[d+1][pi+k]`, guaranteeing valid ascending sequences with no dead ends. Samples are weighted by the product of per-player normalization constants (self-normalized importance sampling). Returns the same `{(player_index, slot_index): Counter({Wire: count})}` format as `compute_position_probabilities()`, so callers can switch seamlessly. Default `num_samples=1_000`. Typical throughput: 1,000–8,000 valid samples/sec depending on game stage.
 
 #### High-Level API
 

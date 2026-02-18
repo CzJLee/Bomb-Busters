@@ -17,6 +17,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import math
+import random
 
 import bomb_busters
 
@@ -214,8 +215,12 @@ def compute_unknown_pool(
         if wire in remaining:
             remaining.remove(wire)
 
-    # Remove info-revealed wires
+    # Remove info-revealed wires from OTHER players only
+    # (observer's info-revealed wires are already removed above
+    # as part of observer_wires)
     for p_idx, s_idx, revealed_value in known.info_revealed:
+        if p_idx == known.active_player_index:
+            continue
         wire = _identify_info_revealed_wire(game, p_idx, s_idx, revealed_value)
         if wire is not None and wire in remaining:
             remaining.remove(wire)
@@ -638,6 +643,7 @@ def _solve_backward(
             d: int,
             pi: int,
             seen: set[int | str],
+            weight: int = 1,
         ) -> None:
             if pi == num_pos:
                 # All positions filled. Skip remaining wire types.
@@ -649,7 +655,8 @@ def _solve_backward(
                 sub_total = _solve(pli + 1, new_remaining)[0]
                 if sub_total == 0:
                     return
-                total[0] += sub_total
+                contrib = weight * sub_total
+                total[0] += contrib
                 # Accumulate per-position wire counts. Walk the
                 # composition encoded in (remaining vs current rem).
                 pos = 0
@@ -662,10 +669,10 @@ def _solve_backward(
                             if counter is None:
                                 counter = collections.Counter()
                                 slot_counts[pos] = counter
-                            counter[w_di] += sub_total
+                            counter[w_di] += contrib
                             pos += 1
                 transitions[new_remaining] = (
-                    transitions.get(new_remaining, 0) + 1
+                    transitions.get(new_remaining, 0) + weight
                 )
                 return
 
@@ -685,7 +692,8 @@ def _solve_backward(
                     if k > 0 and required
                     else seen
                 )
-                _compose(d + 1, pi + k, new_seen)
+                _compose(d + 1, pi + k, new_seen,
+                         weight * math.comb(saved, k))
             rem[d] = saved
 
         _compose(0, 0, set())
@@ -732,6 +740,313 @@ def build_solver(
         return None
     memo = _solve_backward(ctx, show_progress=show_progress)
     return ctx, memo
+
+
+# =============================================================================
+# Monte Carlo Sampling
+# =============================================================================
+
+# Default threshold: when hidden positions exceed this, prefer Monte Carlo
+# over the exact solver. Based on timing: 24 positions ≈ 2s exact,
+# 28+ positions > 60s exact.
+MC_POSITION_THRESHOLD = 22
+
+
+def count_hidden_positions(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+) -> int:
+    """Count hidden positions on other players' stands.
+
+    Fast estimation of solver complexity without building the full
+    SolverContext. Used to decide between exact solver and Monte Carlo.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+
+    Returns:
+        Total number of hidden and unknown-info-revealed positions
+        on other players' stands, plus any discard positions from
+        uncertain wire groups.
+    """
+    count = 0
+    for p_idx, player in enumerate(game.players):
+        if p_idx == active_player_index:
+            continue
+        for slot in player.tile_stand.slots:
+            if slot.state == bomb_busters.SlotState.HIDDEN:
+                count += 1
+            elif (
+                slot.state == bomb_busters.SlotState.INFO_REVEALED
+                and slot.wire is None
+                and slot.info_token == "YELLOW"
+            ):
+                count += 1
+    # Add discard positions from uncertain wire groups
+    known = extract_known_info(game, active_player_index)
+    for group in game.uncertain_wire_groups:
+        accounted_count = 0
+        for wire in group.candidates:
+            if wire in known.observer_wires or wire in known.cut_wires:
+                accounted_count += 1
+            else:
+                # Check if wire is in the unknown pool (not yet accounted)
+                is_on_other_stand = False
+                for p_idx, player in enumerate(game.players):
+                    if p_idx == active_player_index:
+                        continue
+                    for slot in player.tile_stand.slots:
+                        if (
+                            slot.wire == wire
+                            and slot.state != bomb_busters.SlotState.HIDDEN
+                        ):
+                            is_on_other_stand = True
+                            break
+                    if is_on_other_stand:
+                        break
+                if is_on_other_stand:
+                    accounted_count += 1
+        remaining_in_play = max(0, group.count_in_play - accounted_count)
+        unresolved = len(group.candidates) - accounted_count
+        discard = unresolved - remaining_in_play
+        count += max(0, discard)
+    return count
+
+
+def _guided_mc_sample(
+    ctx: SolverContext,
+    num_samples: int = 1_000,
+    seed: int | None = None,
+    max_attempts: int | None = None,
+) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] | None:
+    """Approximate position probabilities via backward-guided MC sampling.
+
+    For each sample, processes players sequentially. For each player,
+    builds a lightweight backward table (like the exact solver, but
+    for a single player with the current pool) and samples a composition
+    from it. This guarantees valid ascending sequences with no dead ends.
+
+    The per-player sampling doesn't account for downstream feasibility:
+    some compositions leave pools that are harder for later players to
+    fill. To correct for this, each sample is weighted by the product of
+    per-player normalization constants (f[0][0] values), implementing
+    self-normalized importance sampling. This produces unbiased
+    probability estimates.
+
+    The only source of rejection is must-have constraints from failed
+    dual cuts, which are checked after each player's composition is
+    sampled. Dead ends from must-have violations are rare.
+
+    Args:
+        ctx: Solver context from _setup_solver().
+        num_samples: Target number of valid samples to collect.
+        seed: Optional random seed for reproducibility.
+        max_attempts: Maximum total attempts (including must-have
+            rejections) before stopping. Defaults to
+            ``num_samples * 5``.
+
+    Returns:
+        Dict mapping (player_index, slot_index) to Counter of
+        {Wire: weighted_count}, matching the format of
+        _forward_pass_positions. Returns None if zero valid samples
+        were found.
+    """
+    if max_attempts is None:
+        max_attempts = num_samples * 5
+
+    rng = random.Random(seed)
+
+    distinct_wires = ctx.distinct_wires
+    num_types = len(distinct_wires)
+
+    # Pre-compute per-player data
+    player_data: list[tuple[int, list[PositionConstraint]]] = []
+    for p in ctx.player_order:
+        positions = ctx.positions_by_player[p]
+        player_data.append((p, positions))
+
+    # Validate pool size matches total positions
+    total_positions = sum(len(positions) for _, positions in player_data)
+    pool_size = sum(ctx.initial_pool)
+    if pool_size != total_positions:
+        return None
+
+    must_have = ctx.must_have
+
+    result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
+    valid_count = 0
+
+    for _ in range(max_attempts):
+        if valid_count >= num_samples:
+            break
+
+        # Reset remaining pool counts
+        rem = list(ctx.initial_pool)
+
+        dead_end = False
+        sample_weight = 1
+        assignments: list[tuple[int, int, bomb_busters.Wire]] = []
+
+        for p, positions in player_data:
+            num_pos = len(positions)
+
+            # Precompute max_run for this player with current pool.
+            # max_run[d][pi] = max consecutive positions starting at pi
+            # that wire type d can fill.
+            max_run: list[list[int]] = []
+            for d in range(num_types):
+                w = distinct_wires[d]
+                runs = [0] * (num_pos + 1)
+                for pi in range(num_pos - 1, -1, -1):
+                    if positions[pi].wire_fits(w):
+                        runs[pi] = runs[pi + 1] + 1
+                    else:
+                        runs[pi] = 0
+                max_run.append(runs)
+
+            # Backward pass: f[d][pi] = total combinatorial weight of
+            # valid compositions that fill positions pi..N-1 using wire
+            # types d..D-1 from the current pool.
+            f = [[0] * (num_pos + 1) for _ in range(num_types + 1)]
+            f[num_types][num_pos] = 1
+
+            for d in range(num_types - 1, -1, -1):
+                for pi in range(num_pos, -1, -1):
+                    total = 0
+                    max_k = min(rem[d], num_pos - pi, max_run[d][pi])
+                    for k in range(max_k + 1):
+                        total += math.comb(rem[d], k) * f[d + 1][pi + k]
+                    f[d][pi] = total
+
+            if f[0][0] == 0:
+                dead_end = True
+                break
+
+            # Accumulate importance weight: product of per-player
+            # normalization constants corrects for the sequential
+            # sampler not accounting for downstream feasibility.
+            sample_weight *= f[0][0]
+
+            # Forward sampling: at each wire type d, sample how many
+            # copies k to place, proportional to C(c_d, k) * f[d+1][pi+k].
+            composition = [0] * num_types
+            pi = 0
+            for d in range(num_types):
+                max_k = min(rem[d], num_pos - pi, max_run[d][pi])
+                # Build weighted options
+                total_w = 0
+                options: list[tuple[int, int]] = []
+                for k in range(max_k + 1):
+                    w = math.comb(rem[d], k) * f[d + 1][pi + k]
+                    if w > 0:
+                        options.append((k, w))
+                        total_w += w
+
+                # Sample from options
+                r = rng.randrange(total_w)
+                cumulative = 0
+                chosen_k = 0
+                for k, w in options:
+                    cumulative += w
+                    if r < cumulative:
+                        chosen_k = k
+                        break
+
+                composition[d] = chosen_k
+                pi += chosen_k
+
+            # Check must-have constraints
+            required = must_have.get(p)
+            if required:
+                seen_values: set[int | str] = set()
+                for d in range(num_types):
+                    if composition[d] > 0:
+                        seen_values.add(distinct_wires[d].gameplay_value)
+                if not required.issubset(seen_values):
+                    dead_end = True
+                    break
+
+            # Map composition to ascending sequence and record
+            pi = 0
+            for d in range(num_types):
+                wire = distinct_wires[d]
+                for _ in range(composition[d]):
+                    if p != _DISCARD_PLAYER_INDEX:
+                        assignments.append(
+                            (p, positions[pi].slot_index, wire),
+                        )
+                    pi += 1
+
+            # Update pool
+            for d in range(num_types):
+                rem[d] -= composition[d]
+
+        if dead_end:
+            continue
+
+        valid_count += 1
+        for p_idx, s_idx, wire in assignments:
+            key = (p_idx, s_idx)
+            counter = result.get(key)
+            if counter is None:
+                counter = collections.Counter()
+                result[key] = counter
+            counter[wire] += sample_weight
+
+    if valid_count == 0:
+        return None
+
+    return result
+
+
+def monte_carlo_probabilities(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    num_samples: int = 1_000,
+    seed: int | None = None,
+    max_attempts: int | None = None,
+) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
+    """Approximate position probabilities via backward-guided MC sampling.
+
+    Alternative to compute_position_probabilities() for game states
+    where the exact solver is too slow (typically >22 hidden positions).
+    Uses backward-guided composition sampling: for each player in each
+    sample, builds a lightweight backward table (single-player DP) from
+    the current pool and samples a valid composition from it. This
+    guarantees valid ascending sequences with no dead ends. Samples are
+    weighted by the product of per-player normalization constants
+    (self-normalized importance sampling) to correct for the sequential
+    sampler not accounting for downstream feasibility.
+
+    Returns the same format as compute_position_probabilities(), so all
+    downstream functions (rank_all_moves, print_probability_analysis,
+    etc.) work identically with either result.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        num_samples: Target number of valid samples (default 1,000).
+        seed: Optional random seed for reproducibility.
+        max_attempts: Maximum total attempts (including must-have
+            rejections). Defaults to ``num_samples * 5``.
+
+    Returns:
+        Dict mapping (player_index, slot_index) to Counter of
+        {Wire: count}. Empty dict if no valid samples found or
+        no hidden positions to solve.
+    """
+    ctx = _setup_solver(game, active_player_index)
+    if ctx is None:
+        return {}
+
+    result = _guided_mc_sample(
+        ctx,
+        num_samples=num_samples,
+        seed=seed,
+        max_attempts=max_attempts if max_attempts is not None else None,
+    )
+    return result if result is not None else {}
 
 
 # =============================================================================
@@ -897,15 +1212,22 @@ def _enumerate_target_player(
         pi: int, min_sv: float,
         seq: list[bomb_busters.Wire], seen: set[int | str],
         rem: list[int], fwd_weight: int,
+        initial_rem: tuple[int, ...],
     ) -> None:
         nonlocal total_count, match_count
         if pi == len(positions):
             if required and not required.issubset(seen):
                 return
+            # Composition weight: ∏_d C(initial_count_d, k_d)
+            comp_weight = 1
+            for i in range(len(distinct_wires)):
+                k = initial_rem[i] - rem[i]
+                if k > 0:
+                    comp_weight *= math.comb(initial_rem[i], k)
             sub_ways = memo[(target_pli + 1, tuple(rem))][0]
             if sub_ways == 0:
                 return
-            weight = fwd_weight * sub_ways
+            weight = fwd_weight * comp_weight * sub_ways
             total_count += weight
             if check_fn(seq, weight):
                 match_count += weight
@@ -925,12 +1247,14 @@ def _enumerate_target_player(
             new_seen = (
                 seen | {w.gameplay_value} if required else seen
             )
-            _bt(pi + 1, w.sort_value, seq, new_seen, rem, fwd_weight)
+            _bt(pi + 1, w.sort_value, seq, new_seen, rem,
+                fwd_weight, initial_rem)
             seq.pop()
             rem[i] += 1
 
     for remaining, fwd_weight in frontier.items():
-        _bt(0, 0.0, [], set(), list(remaining), fwd_weight)
+        _bt(0, 0.0, [], set(), list(remaining), fwd_weight,
+            remaining)
 
     return total_count, match_count
 
@@ -2065,11 +2389,14 @@ def print_probability_analysis(
     max_moves: int = 10,
     show_progress: bool = True,
     include_dd: bool = False,
+    mc_threshold: int | None = None,
+    mc_num_samples: int = 10_000,
 ) -> None:
     """Print a probability analysis for the active player.
 
     Shows guaranteed actions, then ranks the top moves by success
-    probability with colored output.
+    probability with colored output. Automatically uses Monte Carlo
+    sampling when the number of hidden positions exceeds the threshold.
 
     Args:
         game: The current game state.
@@ -2078,7 +2405,16 @@ def print_probability_analysis(
         show_progress: If True (default), show a tqdm progress bar
             during the backward solve.
         include_dd: If True, include Double Detector moves in ranking.
+            Ignored when Monte Carlo is used.
+        mc_threshold: Hidden position count above which Monte Carlo
+            is used instead of the exact solver. Defaults to
+            ``MC_POSITION_THRESHOLD``. Set to 0 to always use Monte
+            Carlo, or a very large number to always use the exact
+            solver.
+        mc_num_samples: Number of Monte Carlo samples when MC is used.
     """
+    if mc_threshold is None:
+        mc_threshold = MC_POSITION_THRESHOLD
     player = game.players[active_player_index]
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print(
@@ -2088,17 +2424,36 @@ def print_probability_analysis(
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print()
 
-    # Build solver once and share across all calls
-    solver = build_solver(game, active_player_index, show_progress=show_progress)
-    if show_progress:
-        print()  # Extra spacing after progress bar
+    # Decide: exact solver or Monte Carlo
+    position_count = count_hidden_positions(game, active_player_index)
+    use_mc = position_count > mc_threshold
+
     ctx: SolverContext | None = None
     memo: MemoDict | None = None
-    if solver is not None:
-        ctx, memo = solver
-        probs = _forward_pass_positions(ctx, memo)
+
+    if use_mc:
+        probs = monte_carlo_probabilities(
+            game, active_player_index,
+            num_samples=mc_num_samples,
+        )
+        print(
+            f"  {_C.DIM}(Monte Carlo: {position_count} positions,"
+            f" {mc_num_samples:,} samples){_C.RESET}"
+        )
+        print()
+        # DD is not supported in Monte Carlo mode
+        include_dd = False
     else:
-        probs = {}
+        solver = build_solver(
+            game, active_player_index, show_progress=show_progress,
+        )
+        if show_progress:
+            print()  # Extra spacing after progress bar
+        if solver is not None:
+            ctx, memo = solver
+            probs = _forward_pass_positions(ctx, memo)
+        else:
+            probs = {}
 
     # Guaranteed actions
     ga = guaranteed_actions(game, active_player_index, probs=probs)
