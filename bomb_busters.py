@@ -1227,6 +1227,9 @@ class GameState:
         active_player_index: If set, display output is rendered from this
             player's perspective (their wires visible, others' hidden
             wires masked as '?'). If None, all wires are shown (god mode).
+        captain_index: Index of the player who is the captain. The
+            captain deals first, indicates first, and takes the first
+            turn. Defaults to 0.
     """
     players: list[Player]
     detonator: Detonator
@@ -1241,6 +1244,7 @@ class GameState:
         default_factory=list,
     )
     active_player_index: int | None = None
+    captain_index: int = 0
 
     @property
     def validation_tokens(self) -> set[int]:
@@ -1271,23 +1275,28 @@ class GameState:
         player_names: list[str],
         wire_configs: list[WireConfig] | None = None,
         seed: int | None = None,
+        captain: int = 0,
     ) -> GameState:
         """Create a new game in full simulation mode.
 
         Shuffles all wires, deals them evenly to players, and sets up
-        the board. The captain is player index 0.
+        the board.
 
         Args:
             player_names: Names of the players (4-5 players).
             wire_configs: Optional list of WireConfig for red/yellow wires.
                 If None, only blue wires are used.
             seed: Optional random seed for reproducibility.
+            captain: Player index of the captain. The captain is dealt
+                first, indicates first, and takes the first turn.
+                Defaults to 0.
 
         Returns:
             A fully initialized GameState.
 
         Raises:
-            ValueError: If player count is not 4-5.
+            ValueError: If player count is not 4-5 or captain index
+                is out of range.
         """
         if seed is not None:
             random.seed(seed)
@@ -1295,6 +1304,11 @@ class GameState:
         player_count = len(player_names)
         if not (4 <= player_count <= 5):
             raise ValueError(f"Player count must be 4-5, got {player_count}")
+        if not (0 <= captain < player_count):
+            raise ValueError(
+                f"Captain index must be 0-{player_count - 1}, "
+                f"got {captain}"
+            )
 
         # Build wire pool
         pool: list[Wire] = create_all_blue_wires()
@@ -1332,17 +1346,18 @@ class GameState:
         # Record all wires in play before shuffling
         wires_in_play = list(pool)
 
-        # Shuffle and deal
+        # Shuffle and deal (starting with the captain, clockwise)
         random.shuffle(pool)
         total_wires = len(pool)
         base_count = total_wires // player_count
         extra = total_wires % player_count
 
-        hands: list[list[Wire]] = []
+        hands: list[list[Wire]] = [[] for _ in range(player_count)]
         idx = 0
-        for i in range(player_count):
-            count = base_count + (1 if i < extra else 0)
-            hands.append(pool[idx:idx + count])
+        for deal_offset in range(player_count):
+            p = (captain + deal_offset) % player_count
+            count = base_count + (1 if deal_offset < extra else 0)
+            hands[p] = pool[idx:idx + count]
             idx += count
 
         # Create players with Double Detector character cards
@@ -1362,6 +1377,8 @@ class GameState:
             equipment=[],
             history=TurnHistory(),
             wires_in_play=wires_in_play,
+            current_player_index=captain,
+            captain_index=captain,
         )
 
     # -----------------------------------------------------------------
@@ -1381,6 +1398,7 @@ class GameState:
         history: TurnHistory | None = None,
         active_player_index: int = 0,
         uncertain_wire_groups: list[UncertainWireGroup] | None = None,
+        captain: int = 0,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -1411,6 +1429,7 @@ class GameState:
                 are auto-generated from the candidates. The probability
                 engine uses discard slots to enumerate which candidates
                 are in play.
+            captain: Player index of the captain. Defaults to 0.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1420,6 +1439,11 @@ class GameState:
             raise ValueError(
                 f"Number of stands ({len(stands)}) must match "
                 f"number of players ({player_count})"
+            )
+        if not (0 <= captain < player_count):
+            raise ValueError(
+                f"Captain index must be 0-{player_count - 1}, "
+                f"got {captain}"
             )
 
         cards = character_cards or [None] * player_count
@@ -1463,6 +1487,7 @@ class GameState:
             uncertain_wire_groups=groups,
             current_player_index=active_player_index,
             active_player_index=active_player_index,
+            captain_index=captain,
         )
 
     # -----------------------------------------------------------------
@@ -2040,10 +2065,11 @@ class GameState:
             else self.current_player_index
         )
         for i, player in enumerate(self.players):
+            crown = " 👑" if i == self.captain_index else ""
             if i == highlight_index:
-                lines.append(f"{_Colors.BOLD}>>> Player {i}: {player}{_Colors.RESET}")
+                lines.append(f"{_Colors.BOLD}>>> Player {i}: {player}{crown}{_Colors.RESET}")
             else:
-                lines.append(f"{indent}Player {i}: {player}")
+                lines.append(f"{indent}Player {i}: {player}{crown}")
             # Mask hidden wires for non-active players
             mask = (
                 self.active_player_index is not None

@@ -1841,5 +1841,137 @@ class TestUncertainWireGroup(unittest.TestCase):
         self.assertEqual(len(yellow_markers), 3)
 
 
+class TestCaptainIndex(unittest.TestCase):
+    """Tests for captain_index on GameState."""
+
+    def test_create_game_captain_defaults_to_zero(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        self.assertEqual(game.captain_index, 0)
+        self.assertEqual(game.current_player_index, 0)
+
+    def test_create_game_captain_explicit(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+            captain=2,
+        )
+        self.assertEqual(game.captain_index, 2)
+        self.assertEqual(game.current_player_index, 2)
+
+    def test_create_game_captain_invalid_index(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.GameState.create_game(
+                player_names=["A", "B", "C", "D"],
+                captain=5,
+            )
+        with self.assertRaises(ValueError):
+            bomb_busters.GameState.create_game(
+                player_names=["A", "B", "C", "D"],
+                captain=-1,
+            )
+
+    def test_create_game_captain_deals_first(self) -> None:
+        """Captain and next players get extra wires when uneven."""
+        # 50 wires (48 blue + 2 yellow) among 4 players = 12+12+13+13
+        # With captain=2: players 2,3 get 13; players 0,1 get 12
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            wire_configs=[
+                bomb_busters.WireConfig(
+                    bomb_busters.WireColor.YELLOW, count=2,
+                ),
+            ],
+            seed=42,
+            captain=2,
+        )
+        counts = [p.tile_stand.remaining_count for p in game.players]
+        self.assertEqual(sum(counts), 50)
+        # Captain (index 2) and next clockwise (index 3) get 13
+        self.assertEqual(counts[2], 13)
+        self.assertEqual(counts[3], 13)
+        # Others get 12
+        self.assertEqual(counts[0], 12)
+        self.assertEqual(counts[1], 12)
+
+    def test_create_game_captain_deals_first_wraps(self) -> None:
+        """Extra wires wrap around when captain is near end."""
+        # 50 wires, 4 players, captain=3: players 3,0 get 13; 1,2 get 12
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            wire_configs=[
+                bomb_busters.WireConfig(
+                    bomb_busters.WireColor.YELLOW, count=2,
+                ),
+            ],
+            seed=42,
+            captain=3,
+        )
+        counts = [p.tile_stand.remaining_count for p in game.players]
+        self.assertEqual(sum(counts), 50)
+        self.assertEqual(counts[3], 13)
+        self.assertEqual(counts[0], 13)
+        self.assertEqual(counts[1], 12)
+        self.assertEqual(counts[2], 12)
+
+    def test_from_partial_state_captain_defaults_to_zero(self) -> None:
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+            ]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B"],
+            stands=stands,
+        )
+        self.assertEqual(game.captain_index, 0)
+
+    def test_from_partial_state_captain_explicit(self) -> None:
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+            ]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B"],
+            stands=stands,
+            captain=1,
+        )
+        self.assertEqual(game.captain_index, 1)
+
+    def test_from_partial_state_captain_invalid(self) -> None:
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+            ]),
+            bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
+        ]
+        with self.assertRaises(ValueError):
+            bomb_busters.GameState.from_partial_state(
+                player_names=["A", "B"],
+                stands=stands,
+                captain=2,
+            )
+
+    def test_crown_in_display(self) -> None:
+        """Captain's crown icon appears in __str__ output."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Carol", "Dave"],
+            seed=42,
+            captain=1,
+        )
+        output = str(game)
+        # Crown should appear on Bob's line (captain)
+        for line in output.split("\n"):
+            if "Bob" in line:
+                self.assertIn("\U0001f451", line)  # 👑
+            elif any(name in line for name in ["Alice", "Carol", "Dave"]):
+                self.assertNotIn("\U0001f451", line)
+
+
 if __name__ == "__main__":
     unittest.main()

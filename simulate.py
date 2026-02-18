@@ -139,6 +139,7 @@ def main() -> None:
         character_cards=character_cards,
         history=history,
         active_player_index=0,
+        captain=0,
     )
 
     # ── Display game state ──────────────────────────────────
