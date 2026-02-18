@@ -31,7 +31,7 @@ def main() -> None:
     """Mid-game probability analysis from Alice's perspective.
 
     A 5-player game with all 48 blue wires (values 1-12), 2 yellow
-    wires (Y4 and Y7), and 1 red wire (R5). The game is about 45%
+    wires (Y4 and Y7), and 1 red wire (R4). The game is about 45%
     resolved (22 wires cut, 1 info token). Blue-3, blue-9, and
     blue-12 are fully validated.
 
@@ -44,12 +44,12 @@ def main() -> None:
     Diana's slot E has an info token showing blue-6 from a prior
     failed dual cut. The detonator has advanced once.
 
-    Wire distribution (51 total = 48 blue + Y4.1 + Y7.1 + R5.5):
+    Wire distribution (51 total = 48 blue + Y4.1 + Y7.1 + R4.5):
 
         Alice  (11): B1  B2  B4  Y4  B6  B7  B8  B8  B9 B11 B12
         Bob    (10): B1  B3  B4  B5  B7  B8  B9 B10 B11 B12
         Charlie(10): B2  B3  B4  B6  B7  B8  B9 B10 B11 B12
-        Diana  (10): B2  B3  B5  R5  B6  B7  Y7  B9 B10 B11
+        Diana  (10): B2  B3  R4  B5  B6  B7  Y7  B9 B10 B11
         Eve    (10): B1  B1  B2  B3  B4  B5  B5  B6 B10 B12
     """
     print("=" * 60)
@@ -61,7 +61,7 @@ def main() -> None:
     wires_in_play = (
         bomb_busters.create_all_blue_wires()
         + [_yellow(4), _yellow(7)]
-        + [_red(5)]
+        + [_red(4)]
     )
 
     # ── Board markers ───────────────────────────────────────
@@ -75,7 +75,7 @@ def main() -> None:
             bomb_busters.MarkerState.KNOWN,
         ),
         bomb_busters.Marker(
-            bomb_busters.WireColor.RED, 5.5,
+            bomb_busters.WireColor.RED, 4.5,
             bomb_busters.MarkerState.KNOWN,
         ),
     ]

@@ -2,7 +2,7 @@
 
 See @README.md for information about Bomb Busters and the rules of the game.
 
-See @Bomb Busters Rulebook.pdf for the official published PDF rulebook of the game. Refer to this for any unclear or ambiguous rules that the README does not cover. The @Bomb Busters FAQ.pdf file contains some additional clarifications. 
+See @docs/Bomb Busters Rulebook.pdf for the official published PDF rulebook of the game. Refer to this for any unclear or ambiguous rules that the README does not cover. The @docs/Bomb Busters FAQ.pdf file contains some additional clarifications.
 
 ## Conventions
 
@@ -30,9 +30,28 @@ The probability engine in @compute_probabilities.py computes the following from 
 
 ## Architecture
 
+### Repository layout
+
+- Python source files stay flat at the repo root for trivial imports and Pyodide compatibility. Do not nest them into a package unless the file count clearly warrants it.
+- `docs/` — Documentation (PDFs, roadmap). Reference with `@docs/` prefix.
+- `tests/` — Unit tests (unittest).
+- `web/` — Future browser-based UI (see @docs/WEB_UI_ROADMAP.md).
+
+### Key modules
+
 - @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `WireConfig`, `UncertainWireGroup`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
 - @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping and discard slots for uncertain (X of Y) wires, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
 
-Use `pyenv virtualenv` to manage the python environment for this repo. The `virtualenv` for this repo is `bomb-busters`. It uses Python 3.14. 
+Use `pyenv virtualenv` to manage the python environment for this repo. The `virtualenv` for this repo is `bomb-busters`. It uses Python 3.14.
+
+## Web UI Constraints
+
+A browser-based UI is planned (see @docs/WEB_UI_ROADMAP.md for full details). The Python engine will run in the browser via Pyodide (CPython compiled to WebAssembly). Keep these constraints in mind during development:
+
+- **Keep stdlib-only.** No dependencies that Pyodide cannot load. Optional imports (like `tqdm`) must use `try/except ImportError`.
+- **Structured data over formatted strings.** New analysis features should always provide a data-returning function separate from any print/display function. The web UI consumes `RankedMove`, `Counter`, and dict structures — not terminal output.
+- **`from_partial_state()` is the API contract.** The web UI constructs game state exclusively through this factory method. Changes to its signature must be backward-compatible (new optional parameters only).
+- **Serialization readiness.** Dataclass fields should use simple types (int, float, str, bool, None, lists, dicts). Avoid fields with functions, generators, or circular references.
+- **Separate ANSI formatting from logic.** Keep data extraction (what to show) separate from formatting (how to show it). The `value_label()` and `stand_lines()` patterns are good — maintain this separation.

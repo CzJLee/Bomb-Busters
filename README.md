@@ -2,6 +2,27 @@
 
 A calculator for the board game [Bomb Busters](https://boardgamegeek.com/boardgame/413246/bomb-busters) to compute the best moves, or chance of success, in different scenarios.
 
+## Table of Contents
+
+- [Rules](#rules)
+  - [Game Components](#game-components)
+  - [Setup](#setup)
+  - [Game Play](#game-play)
+  - [End of the Game](#end-of-the-game)
+- [Gameplay Tips](#gameplay-tips)
+- [Terminal Display Guide](#terminal-display-guide)
+  - [Header](#header)
+  - [Validated](#validated)
+  - [Markers](#markers)
+  - [Players](#players)
+  - [Tile Stand](#tile-stand)
+  - [Game Over](#game-over)
+- [Code Architecture](#code-architecture)
+  - [Repository Layout](#repository-layout)
+  - [Game Model (`bomb_busters.py`)](#game-model-bomb_busterspy)
+  - [Creating a GameState](#creating-a-gamestate)
+  - [Probability Engine (`compute_probabilities.py`)](#probability-engine-compute_probabilitiespy)
+
 ## Rules
 
 Bomb Busters is a co-op game best played with 4-5 players. Each player is given a tile stand which contains sorted wire tiles that is only visible to the player the stand belongs to. The goal of the game is to successfully cut all the wires, thus defusing the bomb and passing the mission.
@@ -182,14 +203,17 @@ When the game ends, a status line appears at the bottom:
 bomb_busters.py              # Game model: enums, dataclasses, game state, actions
 compute_probabilities.py     # Probability engine: constraint solver and API
 simulate.py                  # Example mid-game probability analysis
+docs/
+  WEB_UI_ROADMAP.md          # Web UI development roadmap
+  Bomb Busters Rulebook.pdf  # Official rulebook
+  Bomb Busters FAQ.pdf       # Official FAQ
 tests/
   __init__.py
   test_bomb_busters.py       # Game model tests
   test_compute_probabilities.py  # Probability engine tests
+web/                         # Future: browser-based UI (see docs/WEB_UI_ROADMAP.md)
 CLAUDE.md                    # Project instructions for Claude
 README.md                    # This file
-Bomb Busters Rulebook.pdf    # Official rulebook
-Bomb Busters FAQ.pdf         # Official FAQ
 ```
 
 ### Game Model (`bomb_busters.py`)
