@@ -181,7 +181,7 @@ When the game ends, a status line appears at the bottom:
 ```
 bomb_busters.py              # Game model: enums, dataclasses, game state, actions
 compute_probabilities.py     # Probability engine: constraint solver and API
-simulate.py                  # Example simulation scripts
+simulate.py                  # Example mid-game probability analysis
 tests/
   __init__.py
   test_bomb_busters.py       # Game model tests
@@ -265,29 +265,31 @@ Create a new game in full simulation mode. Shuffles all wires, deals them evenly
 **Examples:**
 
 ```python
-from bomb_busters import GameState, WireColor, WireConfig
+import bomb_busters
 
 # Blue-only game (simplest setup)
-game = GameState.create_game(
+game = bomb_busters.GameState.create_game(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
     seed=42,
 )
 
 # Game with 2 yellow wires and 1 red wire (direct inclusion, markers KNOWN)
-game = GameState.create_game(
+game = bomb_busters.GameState.create_game(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
     wire_configs=[
-        WireConfig(color=WireColor.YELLOW, count=2),
-        WireConfig(color=WireColor.RED, count=1),
+        bomb_busters.WireConfig(color=bomb_busters.WireColor.YELLOW, count=2),
+        bomb_busters.WireConfig(color=bomb_busters.WireColor.RED, count=1),
     ],
     seed=1,
 )
 
 # Game with "X of Y" mode: draw 6 yellow wires, keep 3 (markers UNCERTAIN)
-game = GameState.create_game(
+game = bomb_busters.GameState.create_game(
     player_names=["Alice", "Bob", "Charlie", "Diana"],
     wire_configs=[
-        WireConfig(color=WireColor.YELLOW, count=3, pool_size=6),
+        bomb_busters.WireConfig(
+            color=bomb_busters.WireColor.YELLOW, count=3, pool_size=6,
+        ),
     ],
 )
 
@@ -322,56 +324,34 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 **Example:**
 
 ```python
-from bomb_busters import (
-    GameState, Slot, SlotState, Wire, WireColor,
-    create_all_blue_wires,
-)
+import bomb_busters
+import compute_probabilities
 
 # 5 players, observer is player 0.
-# Player 0 (observer) knows their own wires exactly.
-# Other players' hidden wires are None (unknown).
+# Use TileStand.from_string() for quick entry (see below).
+# Player 0 (observer) knows their own wires: ?N for hidden, N for cut.
+# Other players' hidden wires are ? (unknown to the observer).
 
-# Observer's stand (all wires known)
-observer_stand = [
-    Slot(wire=Wire(WireColor.BLUE, 2.0), state=SlotState.HIDDEN),
-    Slot(wire=Wire(WireColor.BLUE, 3.0), state=SlotState.CUT),
-    Slot(wire=Wire(WireColor.BLUE, 5.0), state=SlotState.HIDDEN),
-    Slot(wire=Wire(WireColor.BLUE, 7.0), state=SlotState.HIDDEN),
-    Slot(wire=Wire(WireColor.BLUE, 9.0), state=SlotState.HIDDEN),
-]
+alice = bomb_busters.TileStand.from_string("?2 3 ?5 ?7 ?9")       # observer
+bob   = bomb_busters.TileStand.from_string("? 4 ? i8 ?")          # partial knowledge
+charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")  # all unknown
+diana   = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+eve     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
 
-# Another player's stand with partial knowledge:
-# - Cut wires are known (face-up)
-# - Info-revealed wires show their token value
-# - Hidden wires are None (unknown to the observer)
-other_stand = [
-    Slot(wire=None, state=SlotState.HIDDEN),           # unknown
-    Slot(wire=Wire(WireColor.BLUE, 4.0),               # cut wire (known)
-         state=SlotState.CUT),
-    Slot(wire=None, state=SlotState.HIDDEN),            # unknown
-    Slot(wire=None, state=SlotState.INFO_REVEALED,      # failed dual cut
-         info_token=8),                                 # revealed as blue 8
-    Slot(wire=None, state=SlotState.HIDDEN),            # unknown
-]
-
-game = GameState.from_partial_state(
+game = bomb_busters.GameState.from_partial_state(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
     stands=[
-        observer_stand,
-        other_stand,
-        [Slot(wire=None, state=SlotState.HIDDEN)] * 9,  # all unknown
-        [Slot(wire=None, state=SlotState.HIDDEN)] * 9,
-        [Slot(wire=None, state=SlotState.HIDDEN)] * 9,
+        alice.slots, bob.slots, charlie.slots,
+        diana.slots, eve.slots,
     ],
     detonator_failures=1,
     validation_tokens={3},          # all four blue-3 wires have been cut
-    wires_in_play=create_all_blue_wires(),  # 48 blue wires (no colored)
+    wires_in_play=bomb_busters.create_all_blue_wires(),
 )
 game.observer_index = 0
 
 # Use the probability engine
-from compute_probabilities import rank_all_moves
-moves = rank_all_moves(game, observer_index=0)
+moves = compute_probabilities.rank_all_moves(game, observer_index=0)
 for move in moves[:5]:
     print(move)
 ```
@@ -447,9 +427,13 @@ stand = bomb_busters.TileStand.from_string("1,2,?3,4", sep=",")
 
 #### Constraint Solver
 
-**`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions).
+**`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions). Supports a `required_color` field for slots where the wire color is known but the exact identity is not (e.g., yellow info tokens in calculator mode).
 
-**`compute_position_probabilities(game, observer_index)`** — Backtracking solver that enumerates all valid wire-to-position assignments. Uses identical-wire grouping via `Counter` (e.g., four blue-5s are interchangeable) and sort-order pruning for efficiency. Returns `{(player_index, slot_index): Counter({Wire: count})}`.
+**`SolverContext`** — Immutable context built once per game-state + observer via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
+
+**`build_solver(game, observer_index)`** — Builds a `SolverContext` and `MemoDict` pair. The backward solve uses composition-based enumeration (how many of each wire type per player, not per-position) with memoization at player boundaries. Optionally displays a tqdm progress bar. Call once, then pass the result to any number of forward-pass functions for instant results.
+
+**`compute_position_probabilities(game, observer_index, ctx, memo)`** — Forward pass that computes per-position wire probability distributions from a prebuilt memo. Returns `{(player_index, slot_index): Counter({Wire: count})}`. When `ctx`/`memo` are omitted, builds them internally.
 
 #### High-Level API
 
@@ -460,6 +444,9 @@ stand = bomb_busters.TileStand.from_string("1,2,?3,4", sep=",")
 | `probability_of_red_wire(game, observer, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
 | `probability_of_red_wire_dd(game, observer, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
 | `guaranteed_actions(game, observer)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
-| `rank_all_moves(game, observer)` | Rank all possible moves by probability, sorted descending |
+| `rank_all_moves(game, observer, include_dd)` | Rank all possible moves by probability, sorted descending |
+| `print_probability_analysis(game, observer, max_moves, include_dd)` | Print a colored terminal report with guaranteed actions and ranked moves |
+
+All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state.
 
 **`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, `probability`, and `red_probability` (risk of hitting a red wire).
