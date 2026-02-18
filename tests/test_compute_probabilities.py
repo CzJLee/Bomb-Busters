@@ -76,6 +76,42 @@ class TestExtractKnownInfo(unittest.TestCase):
         known = compute_probabilities.extract_known_info(game, 0)
         self.assertEqual(len(known.cut_wires), 2)
 
+    def test_incomplete_active_player_stand_raises(self) -> None:
+        """Raises ValueError when active player has unknown wires."""
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[
+                # Alice (active player) has unknown wires — incomplete
+                bomb_busters.TileStand.from_string("? ? ?3 ?"),
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+            ],
+            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+        )
+        with self.assertRaises(ValueError) as cm:
+            compute_probabilities.extract_known_info(game, 0)
+        self.assertIn("incomplete tile stand", str(cm.exception))
+        self.assertIn("Alice", str(cm.exception))
+
+    def test_incomplete_non_active_player_is_ok(self) -> None:
+        """Other players can have unknown wires — that's expected."""
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[
+                # Alice knows her own wires
+                bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4"),
+                # Bob has unknowns — normal for a non-active player
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+                bomb_busters.TileStand.from_string("? ? ? ?"),
+            ],
+            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+        )
+        # Should not raise
+        known = compute_probabilities.extract_known_info(game, 0)
+        self.assertEqual(len(known.observer_wires), 4)
+
 
 class TestComputeUnknownPool(unittest.TestCase):
     """Tests for compute_probabilities.compute_unknown_pool."""

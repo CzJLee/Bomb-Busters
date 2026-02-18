@@ -79,6 +79,23 @@ def extract_known_info(
     """
     observer = game.players[active_player_index]
 
+    # The observer must know all their own wires for probability
+    # calculations to work. Unknown wires (None) indicate incomplete
+    # tile stand information.
+    unknown_indices = [
+        i for i, s in enumerate(observer.tile_stand.slots)
+        if s.wire is None
+    ]
+    if unknown_indices:
+        letters = ", ".join(chr(ord("A") + i) for i in unknown_indices)
+        raise ValueError(
+            f"Cannot compute probabilities: player "
+            f"{active_player_index} ({observer.name}) has "
+            f"incomplete tile stand info at slot(s) {letters}. "
+            f"The active player's tile stand must have all wire "
+            f"identities known."
+        )
+
     # Observer's own wires (all slots, including cut ones)
     observer_wires = [
         s.wire for s in observer.tile_stand.slots
