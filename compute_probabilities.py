@@ -1314,7 +1314,7 @@ def guaranteed_actions(
         )
         result["reveal_red"] = all_red
 
-    # 100% probability dual cuts
+    # 100% probability dual cuts from solver
     if probs is None:
         probs = compute_position_probabilities(game, active_player_index)
     for (p_idx, s_idx), counter in probs.items():
@@ -1334,6 +1334,34 @@ def guaranteed_actions(
                 )
                 if observer_has:
                     result["dual_cuts"].append((p_idx, s_idx, gv))  # type: ignore[union-attr]
+
+    # Info-revealed guaranteed dual cuts: slots with info tokens have
+    # publicly known values. If the observer has a matching wire, the
+    # dual cut is guaranteed to succeed. These slots are not in the
+    # solver (their identity is already determined) so they must be
+    # checked separately.
+    found_dual_cuts: set[tuple[int, int, int | str]] = {
+        (p, s, v) for p, s, v in result["dual_cuts"]  # type: ignore[union-attr]
+    }
+    for p_idx, other_player in enumerate(game.players):
+        if p_idx == active_player_index:
+            continue
+        for s_idx, slot in enumerate(other_player.tile_stand.slots):
+            if not slot.is_info_revealed:
+                continue
+            if slot.info_token is None:
+                continue
+            gv = slot.info_token
+            if (p_idx, s_idx, gv) in found_dual_cuts:
+                continue
+            observer_has = any(
+                s.wire is not None
+                and s.wire.gameplay_value == gv
+                and s.is_hidden
+                for s in player.tile_stand.slots
+            )
+            if observer_has:
+                result["dual_cuts"].append((p_idx, s_idx, gv))  # type: ignore[union-attr]
 
     return result
 
@@ -1482,6 +1510,33 @@ def rank_all_moves(
                     probability=prob,
                     red_probability=slot_red_prob,
                 ))
+
+    # Info-revealed dual cuts: slots with info tokens have publicly known
+    # values. These are guaranteed (100%) dual cuts if the observer has a
+    # matching wire. They may not appear in probs because the solver
+    # excludes slots whose identity is already determined.
+    for p_idx, other_player in enumerate(game.players):
+        if p_idx == active_player_index:
+            continue
+        for s_idx, slot in enumerate(other_player.tile_stand.slots):
+            if not slot.is_info_revealed:
+                continue
+            if slot.info_token is None:
+                continue
+            gv = slot.info_token
+            if gv not in observer_values:
+                continue
+            # Skip if already covered by probs-based dual cuts
+            if (p_idx, s_idx) in probs:
+                continue
+            moves.append(RankedMove(
+                action_type="dual_cut",
+                target_player=p_idx,
+                target_slot=s_idx,
+                guessed_value=gv,
+                probability=1.0,
+                red_probability=0.0,
+            ))
 
     # Double Detector moves
     if include_dd and observer_blue_values:

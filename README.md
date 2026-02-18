@@ -381,6 +381,7 @@ Create a tile stand from shorthand string notation for quick mid-game entry. Eac
 | `?RN` | HIDDEN | Red wire known to observer | `?R5` → hidden red-5 |
 | `iN` | INFO_REVEALED | Blue info token from failed dual cut | `i5` → info blue-5 |
 | `iY` | INFO_REVEALED | Yellow info token from failed dual cut | `iY` → info yellow |
+| `iYN` | INFO_REVEALED | Yellow info token, observer knows exact wire | `iY4` → info yellow-4 |
 
 All prefixes (`Y`, `R`, `i`, `?`) are case-insensitive.
 

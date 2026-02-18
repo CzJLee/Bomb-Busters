@@ -100,7 +100,7 @@ def main() -> None:
     # Solo cut available: blue-8 (all other B8s are cut)
     # Dual cut values: 4, YELLOW, 6, 7
     alice_stand = bomb_busters.TileStand.from_string(
-        "1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12", num_tiles=11,
+        "1 2 ?4 iY4 ?6 ?7 ?8 ?8 9 11 12", num_tiles=11,
     )
 
     # Bob (P1) — 5 cut, 5 hidden (unknown to Alice)
@@ -110,7 +110,7 @@ def main() -> None:
 
     # Charlie (P2) — 5 cut, 5 hidden (unknown to Alice)
     charlie_stand = bomb_busters.TileStand.from_string(
-        "2 3 ? ? ? 8 9 ? ? 12", num_tiles=10,
+        "2 3 ? ? i7 8 9 ? ? 12", num_tiles=10,
     )
 
     # Diana (P3) — 4 cut, 1 info-revealed, 5 hidden

@@ -181,6 +181,26 @@ class TestSlot(unittest.TestCase):
         self.assertIn("Y", colored_calc)
         self.assertNotIn("YELLOW", colored_calc)
 
+    def test_blue_info_token_display_color(self) -> None:
+        """Blue info token displays in blue, not white."""
+        # With wire set (normal case after parser fix)
+        s = bomb_busters.Slot(
+            wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+            state=bomb_busters.SlotState.INFO_REVEALED,
+            info_token=6,
+        )
+        _, colored = s.value_label()
+        self.assertIn("\033[94m", colored)  # BLUE ANSI code
+
+        # Defensive: wire=None but info_token is int (manually constructed)
+        s_calc = bomb_busters.Slot(
+            wire=None,
+            state=bomb_busters.SlotState.INFO_REVEALED,
+            info_token=6,
+        )
+        _, colored_calc = s_calc.value_label()
+        self.assertIn("\033[94m", colored_calc)  # BLUE ANSI code
+
 
 class TestTileStand(unittest.TestCase):
     """Tests for the bomb_busters.TileStand class."""
@@ -352,20 +372,56 @@ class TestTileStandFromString(unittest.TestCase):
     # -- INFO_REVEALED wires ('i' prefix) --
 
     def test_info_blue(self) -> None:
-        """'iN' produces INFO_REVEALED with blue info token."""
+        """'iN' produces INFO_REVEALED with blue wire and info token."""
         stand = bomb_busters.TileStand.from_string("i5")
         slot = stand.slots[0]
         self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
-        self.assertIsNone(slot.wire)
+        self.assertIsNotNone(slot.wire)
+        self.assertEqual(
+            slot.wire,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+        )
         self.assertEqual(slot.info_token, 5)
 
     def test_info_yellow(self) -> None:
-        """'iY' produces INFO_REVEALED with yellow info token."""
+        """'iY' produces INFO_REVEALED with yellow info token, wire unknown."""
         stand = bomb_busters.TileStand.from_string("iY")
         slot = stand.slots[0]
         self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
         self.assertIsNone(slot.wire)
         self.assertEqual(slot.info_token, "YELLOW")
+
+    def test_info_yellow_with_number(self) -> None:
+        """'iYN' produces INFO_REVEALED yellow with known wire identity."""
+        stand = bomb_busters.TileStand.from_string("iY4")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertIsNotNone(slot.wire)
+        self.assertEqual(
+            slot.wire,
+            bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
+        )
+        self.assertEqual(slot.info_token, "YELLOW")
+
+    def test_info_yellow_with_number_case_insensitive(self) -> None:
+        """'iy4' is case-insensitive."""
+        stand = bomb_busters.TileStand.from_string("iy4")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertEqual(
+            slot.wire,
+            bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
+        )
+        self.assertEqual(slot.info_token, "YELLOW")
+
+    def test_info_red_raises(self) -> None:
+        """'iR' and 'iRN' are invalid — no red info tokens exist."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("iR")
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("iR5")
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("ir3")
 
     # -- Case insensitivity --
 
@@ -378,6 +434,7 @@ class TestTileStandFromString(unittest.TestCase):
         self.assertEqual(stand.slots[1].state, bomb_busters.SlotState.CUT)
         self.assertEqual(stand.slots[2].info_token, "YELLOW")
         self.assertEqual(stand.slots[3].info_token, 5)
+        self.assertEqual(stand.slots[3].wire.color, bomb_busters.WireColor.BLUE)
 
     # -- Mixed stands (simulate.py examples) --
 
@@ -421,7 +478,10 @@ class TestTileStandFromString(unittest.TestCase):
             stand.slots[4].state, bomb_busters.SlotState.INFO_REVEALED,
         )
         self.assertEqual(stand.slots[4].info_token, 6)
-        self.assertIsNone(stand.slots[4].wire)
+        self.assertEqual(
+            stand.slots[4].wire,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0),
+        )
 
     # -- Custom separator --
 
@@ -572,6 +632,59 @@ class TestSortValueBounds(unittest.TestCase):
         lower, upper = bomb_busters.get_sort_value_bounds(slots, 1)
         self.assertEqual(lower, 3.0)
         self.assertEqual(upper, 8.0)
+
+    def test_info_revealed_blue_wire_none_uses_info_token(self) -> None:
+        """INFO_REVEALED blue slot with wire=None uses info_token as bound.
+
+        In calculator mode, manually constructed INFO_REVEALED slots may
+        have wire=None but info_token set to an int. The sort_value should
+        be inferred from the info_token.
+        """
+        slots = [
+            bomb_busters.Slot(
+                wire=None,
+                state=bomb_busters.SlotState.INFO_REVEALED,
+                info_token=3,
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                state=bomb_busters.SlotState.HIDDEN,  # target
+            ),
+            bomb_busters.Slot(
+                wire=None,
+                state=bomb_busters.SlotState.INFO_REVEALED,
+                info_token=8,
+            ),
+        ]
+        lower, upper = bomb_busters.get_sort_value_bounds(slots, 1)
+        self.assertEqual(lower, 3.0)
+        self.assertEqual(upper, 8.0)
+
+    def test_yellow_info_revealed_not_used_as_bound(self) -> None:
+        """INFO_REVEALED yellow slot with wire=None doesn't provide bounds.
+
+        Yellow info tokens show 'YELLOW' but not a specific sort_value,
+        so they cannot narrow bounds for adjacent hidden slots.
+        """
+        slots = [
+            bomb_busters.Slot(
+                wire=None,
+                state=bomb_busters.SlotState.INFO_REVEALED,
+                info_token="YELLOW",
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                state=bomb_busters.SlotState.HIDDEN,  # target
+            ),
+            bomb_busters.Slot(
+                wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+                state=bomb_busters.SlotState.CUT,
+            ),
+        ]
+        lower, upper = bomb_busters.get_sort_value_bounds(slots, 1)
+        # Yellow info (wire=None, no numeric token) cannot provide lower bound
+        self.assertEqual(lower, 0.0)
+        self.assertEqual(upper, 9.0)
 
 
 class TestCharacterCard(unittest.TestCase):
@@ -1242,6 +1355,52 @@ class TestDualCutExecution(unittest.TestCase):
         game = self._make_game()
         game.execute_dual_cut(1, 0, 1)
         self.assertEqual(len(game.history.actions), 1)
+
+    def test_dual_cut_info_revealed_target(self) -> None:
+        """Dual cut on an INFO_REVEALED target slot should succeed.
+
+        Info-revealed slots are uncut wires with known values. A player
+        can dual cut them just like hidden wires.
+        """
+        game = self._make_game()
+        # First, fail a dual cut to create an info-revealed slot.
+        # P0 guesses P1's slot 0 (blue-1) is a 2 → wrong, creates info token.
+        action = game.execute_dual_cut(1, 0, 2)
+        self.assertEqual(action.result, bomb_busters.ActionResult.FAIL_BLUE_YELLOW)
+        self.assertTrue(game.players[1].tile_stand.slots[0].is_info_revealed)
+        self.assertEqual(game.players[1].tile_stand.slots[0].info_token, 1)
+
+        # Now P1 can target P1's info-revealed slot 0 (which we know is 1).
+        # P1 (current player) dual cuts P0's slot 0 (blue-1) for value 1.
+        # This succeeds, cutting P1's own blue-1 at slot 0 (which is
+        # info-revealed, not hidden) and P0's slot 0.
+        action2 = game.execute_dual_cut(0, 0, 1)
+        self.assertEqual(action2.result, bomb_busters.ActionResult.SUCCESS)
+        # P1's info-revealed slot 0 should now be cut (used as actor's match)
+        self.assertTrue(game.players[1].tile_stand.slots[0].is_cut)
+
+        # Alternatively: another player can target an info-revealed slot.
+        # P2 (current) fails guessing P0's slot 1 (blue-2) is 3 → info token.
+        self.assertEqual(game.current_player_index, 2)
+        action3 = game.execute_dual_cut(0, 1, 3)
+        self.assertEqual(action3.result, bomb_busters.ActionResult.FAIL_BLUE_YELLOW)
+        self.assertTrue(game.players[0].tile_stand.slots[1].is_info_revealed)
+
+        # P3 (current) dual cuts P0's info-revealed slot 1 for value 2.
+        self.assertEqual(game.current_player_index, 3)
+        action4 = game.execute_dual_cut(0, 1, 2)
+        self.assertEqual(action4.result, bomb_busters.ActionResult.SUCCESS)
+        self.assertTrue(game.players[0].tile_stand.slots[1].is_cut)
+
+    def test_dual_cut_already_cut_raises(self) -> None:
+        """Dual cut on an already-cut slot should raise ValueError."""
+        game = self._make_game()
+        # Cut P1's slot 0.
+        game.execute_dual_cut(1, 0, 1)
+        self.assertTrue(game.players[1].tile_stand.slots[0].is_cut)
+        # Trying to cut it again should fail.
+        with self.assertRaises(ValueError):
+            game.execute_dual_cut(1, 0, 1)
 
 
 class TestDoubleDectectorExecution(unittest.TestCase):

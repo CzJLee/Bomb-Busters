@@ -2551,5 +2551,280 @@ class TestUncertainWireGroups(unittest.TestCase):
         self.assertGreater(yellow_count, 0)
 
 
+class TestInfoRevealedProbability(unittest.TestCase):
+    """Tests for info-revealed slots in probability calculations.
+
+    Covers:
+    - Guaranteed dual cuts when a blue wire is info-revealed
+    - Guaranteed dual cuts when a yellow wire is info-revealed
+    - Info-revealed blue wires narrowing neighbor constraints
+    - Yellow info-revealed constraints narrowing from known yellows
+    - rank_all_moves including info-revealed guaranteed dual cuts
+    """
+
+    def test_guaranteed_dual_cut_blue_info_revealed(self) -> None:
+        """Blue info-revealed slot is a guaranteed dual cut.
+
+        P1 has slot B info-revealed as blue-7 (from a prior failed dual
+        cut). P0 has a hidden blue-7. The dual cut should be guaranteed.
+        """
+        # P0 (observer): hidden blue-5, hidden blue-7
+        # P1: cut blue-1, info-revealed blue-7, hidden blue-?
+        # P2: hidden blue-?, hidden blue-?
+        # P3: hidden blue-?, hidden blue-?
+        # Pool: blue 1,1,1,1, 5,5,5,5, 7,7,7,7, 9,9,9,9
+        p0 = bomb_busters.TileStand.from_string("?5 ?7")
+        p1 = bomb_busters.TileStand.from_string("1 i7 ?")
+        p2 = bomb_busters.TileStand.from_string("? ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=(
+                bomb_busters.create_blue_wires(1, 1)
+                + bomb_busters.create_blue_wires(5, 5)
+                + bomb_busters.create_blue_wires(7, 7)
+                + bomb_busters.create_blue_wires(9, 9)
+            ),
+            active_player_index=0,
+        )
+
+        result = compute_probabilities.guaranteed_actions(game, 0)
+        dual_cuts = result["dual_cuts"]
+        # Should find P1 slot 1 (the info-revealed 7) as guaranteed
+        self.assertIn((1, 1, 7), dual_cuts)
+
+    def test_guaranteed_dual_cut_yellow_info_revealed(self) -> None:
+        """Yellow info-revealed slot is a guaranteed dual cut.
+
+        P1 has a slot info-revealed as YELLOW. P0 has a hidden yellow
+        wire. Dual cut guessing YELLOW should be guaranteed.
+        """
+        p0 = bomb_busters.TileStand.from_string("?5 ?Y4")
+        p1 = bomb_busters.TileStand.from_string("1 iY ?")
+        p2 = bomb_busters.TileStand.from_string("? ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=(
+                bomb_busters.create_blue_wires(1, 1)
+                + bomb_busters.create_blue_wires(5, 5)
+                + bomb_busters.create_blue_wires(7, 7)
+                + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
+                   bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 7.1)]
+            ),
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.YELLOW, 4.1,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.YELLOW, 7.1,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+            ],
+            active_player_index=0,
+        )
+
+        result = compute_probabilities.guaranteed_actions(game, 0)
+        dual_cuts = result["dual_cuts"]
+        # Should find P1 slot 1 (info-revealed YELLOW) as guaranteed
+        self.assertIn((1, 1, "YELLOW"), dual_cuts)
+
+    def test_rank_all_moves_includes_info_revealed(self) -> None:
+        """rank_all_moves includes info-revealed guaranteed dual cuts at 100%."""
+        p0 = bomb_busters.TileStand.from_string("?5 ?7")
+        p1 = bomb_busters.TileStand.from_string("1 i7 ?")
+        p2 = bomb_busters.TileStand.from_string("? ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=(
+                bomb_busters.create_blue_wires(1, 1)
+                + bomb_busters.create_blue_wires(5, 5)
+                + bomb_busters.create_blue_wires(7, 7)
+                + bomb_busters.create_blue_wires(9, 9)
+            ),
+            active_player_index=0,
+        )
+
+        moves = compute_probabilities.rank_all_moves(game, 0)
+        # Find the move for P1 slot 1 guessing 7
+        info_move = [
+            m for m in moves
+            if m.target_player == 1
+            and m.target_slot == 1
+            and m.guessed_value == 7
+        ]
+        self.assertEqual(len(info_move), 1)
+        self.assertAlmostEqual(info_move[0].probability, 1.0)
+        self.assertAlmostEqual(info_move[0].red_probability, 0.0)
+
+    def test_info_revealed_bounds_narrow_neighbor(self) -> None:
+        """Info-revealed blue slot narrows constraints for adjacent hidden slot.
+
+        Setup: P1 has cut-3, hidden-?, info-7, hidden-?
+        The info-7 provides an upper bound of 7.0 for P1 slot 1,
+        restricting it to wires with sort_value in [3.0, 7.0].
+        Without the info token (if it were hidden), the upper bound
+        would extend to 13.0 and allow blue-8 at that position.
+
+        The single blue-3 remaining in the pool can only go to P1[1]
+        (the only position with sort bounds that allow 3.0), making
+        P1[1] deterministic at 100% blue-3. The info-7 is critical
+        for this: it establishes the upper bound that, combined with
+        P2/P3 bounds of (5.0, 13.0), forces blue-3 to P1[1].
+
+        4 players, 16 wires:
+          P0 (observer, 2 slots): blue-4, blue-5
+          P1 (4 slots): cut-3, hidden-?, info-7, hidden-?
+          P2 (5 slots): cut-3, cut-4, cut-5, hidden-?, hidden-?
+          P3 (5 slots): cut-3, cut-4, cut-5, hidden-?, hidden-?
+        """
+        p0 = bomb_busters.TileStand.from_string("?4 ?5")
+        p1 = bomb_busters.TileStand.from_string("3 ? i7 ?")
+        p2 = bomb_busters.TileStand.from_string("3 4 5 ? ?")
+        p3 = bomb_busters.TileStand.from_string("3 4 5 ? ?")
+
+        # 16 wires: 4×3, 3×4, 3×5, 2×6, 2×7, 2×8 = 16
+        wires = (
+            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)] * 4
+            + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 4.0)] * 3
+            + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)] * 3
+            + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)] * 2
+            + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)] * 2
+            + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)] * 2
+        )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=wires,
+            active_player_index=0,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(
+            game, 0,
+        )
+        # P1 slot 1 (hidden between cut-3 and info-7):
+        # Bounds are [3.0, 7.0]. Pool has 1×3, 2×6, 1×7, 2×8.
+        # P2/P3 hidden slots have lower bound 5.0, so blue-3 can't
+        # go there. Blue-3 is forced to P1[1] — 100% deterministic.
+        counter = probs[(1, 1)]
+        total = sum(counter.values())
+        self.assertGreater(total, 0)
+
+        blue3 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0)
+        blue8 = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)
+
+        # blue-3 is forced here (100%)
+        self.assertEqual(counter.get(blue3, 0), total)
+        # blue-8 cannot appear (sv=8.0 > upper bound 7.0)
+        self.assertEqual(counter.get(blue8, 0), 0)
+
+    def test_yellow_info_constraints_narrow_from_known_yellows(self) -> None:
+        """Yellow info-revealed slot with sort bounds can identify exact wire.
+
+        If only two yellow wires are in play (Y2 and Y9), and a yellow
+        info-revealed slot has sort bounds that exclude Y9 (e.g., upper
+        bound is 5.0), then it must be Y2. The solver should assign Y2
+        with 100% probability at that slot.
+        """
+        # P0 (observer): hidden blue-1, hidden blue-3
+        # P1: cut-1, info-YELLOW (wire=None), cut-5, hidden-?
+        #   The yellow info slot is between cut-1 (sv=1.0) and cut-5 (sv=5.0).
+        #   Only Y2.1 fits (Y9.1 > 5.0).
+        # P2: hidden-?, hidden-?
+        # P3: hidden-?, hidden-?
+        p0 = bomb_busters.TileStand.from_string("?1 ?3")
+        p1 = bomb_busters.TileStand.from_string("1 iY 5 ?")
+        p2 = bomb_busters.TileStand.from_string("? ?")
+        p3 = bomb_busters.TileStand.from_string("? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=(
+                bomb_busters.create_blue_wires(1, 1)
+                + bomb_busters.create_blue_wires(3, 3)
+                + bomb_busters.create_blue_wires(5, 5)
+                + bomb_busters.create_blue_wires(9, 9)
+                + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1),
+                   bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 9.1)]
+            ),
+            markers=[
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.YELLOW, 2.1,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+                bomb_busters.Marker(
+                    bomb_busters.WireColor.YELLOW, 9.1,
+                    bomb_busters.MarkerState.KNOWN,
+                ),
+            ],
+            active_player_index=0,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(
+            game, 0,
+        )
+        # P1 slot 1 (yellow info-revealed, bounds 1.0 to 5.0):
+        # Only Y2.1 fits (Y9.1 = 9.1 > 5.0).
+        counter = probs[(1, 1)]
+        total = sum(counter.values())
+        self.assertGreater(total, 0)
+        y2 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1)
+        y2_count = counter.get(y2, 0)
+        self.assertEqual(y2_count, total, "Y2 should be the only possibility")
+
+    def test_uncertain_yellow_info_narrows_with_bounds(self) -> None:
+        """Uncertain (X-of-Y) yellow with info-revealed slot narrows correctly.
+
+        3 yellow candidates (Y2, Y3, Y9), 2 in play. A yellow info slot
+        between cut-1 and cut-5 can only hold Y2.1 or Y3.1 (Y9.1 is
+        too large). The solver should only assign Y2 or Y3 here.
+        """
+        p0 = bomb_busters.TileStand.from_string("?1 ?3")
+        p1 = bomb_busters.TileStand.from_string("1 iY 5 ?")
+        p2 = bomb_busters.TileStand.from_string("? ?")
+        p3 = bomb_busters.TileStand.from_string("? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["P0", "P1", "P2", "P3"],
+            stands=[p0, p1, p2, p3],
+            wires_in_play=(
+                bomb_busters.create_blue_wires(1, 1)
+                + bomb_busters.create_blue_wires(3, 3)
+                + bomb_busters.create_blue_wires(5, 5)
+                + bomb_busters.create_blue_wires(9, 9)
+            ),
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+            active_player_index=0,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(
+            game, 0,
+        )
+        # P1 slot 1 (yellow info-revealed, bounds 1.0 to 5.0):
+        # Y9.1 doesn't fit. Only Y2.1 and Y3.1 are valid.
+        counter = probs[(1, 1)]
+        total = sum(counter.values())
+        self.assertGreater(total, 0)
+        y2 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1)
+        y3 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)
+        y9 = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 9.1)
+        y2_count = counter.get(y2, 0)
+        y3_count = counter.get(y3, 0)
+        y9_count = counter.get(y9, 0)
+        self.assertGreater(y2_count + y3_count, 0, "Y2 or Y3 must be possible")
+        self.assertEqual(y9_count, 0, "Y9 should not fit in bounds")
+
+
 if __name__ == "__main__":
     unittest.main()

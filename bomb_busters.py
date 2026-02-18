@@ -268,6 +268,9 @@ class Slot:
                 token_str = "?"
             if self.wire is not None:
                 colored = f"{_Colors.BOLD}{self.wire.color.ansi()}{token_str}{_Colors.RESET}"
+            elif isinstance(self.info_token, int):
+                # Calculator mode: numeric info token is always blue
+                colored = f"{_Colors.BOLD}{_Colors.BLUE}{token_str}{_Colors.RESET}"
             else:
                 colored = f"{_Colors.BOLD}{token_str}{_Colors.RESET}"
             return token_str, colored
@@ -331,6 +334,11 @@ def _parse_slot_token(token: str) -> Slot:
         ?RN     — HIDDEN red wire (e.g., "?R5")
         iN      — INFO_REVEALED blue info token (e.g., "i5")
         iY      — INFO_REVEALED yellow info token (e.g., "iY")
+        iYN     — INFO_REVEALED yellow info token, observer knows
+                  exact wire (e.g., "iY4")
+
+    Red info tokens (``iR``, ``iRN``) are invalid — there is no such
+    thing as a red info token in Bomb Busters.
 
     Prefixes are case-insensitive.
 
@@ -351,15 +359,42 @@ def _parse_slot_token(token: str) -> Slot:
         rest = token[1:]
         if not rest:
             raise ValueError(f"Info token missing value: {token!r}")
-        if rest.upper() == "Y":
+        upper_rest = rest.upper()
+        # Red info tokens do not exist (cutting red = game over)
+        if upper_rest.startswith("R"):
+            raise ValueError(
+                f"Red info tokens do not exist: {token!r}. "
+                f"Use '?R{rest[1:]}' for a hidden red wire known "
+                f"to the observer."
+            )
+        if upper_rest == "Y":
+            # iY — yellow info token, exact wire unknown to observer
             return Slot(wire=None, state=SlotState.INFO_REVEALED,
                         info_token="YELLOW")
+        if upper_rest.startswith("Y"):
+            # iYN — yellow info token, observer knows exact wire
+            num_str = rest[1:]
+            try:
+                n = int(num_str)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid yellow info token number: {token!r}"
+                )
+            return Slot(
+                wire=Wire(WireColor.YELLOW, n + 0.1),
+                state=SlotState.INFO_REVEALED,
+                info_token="YELLOW",
+            )
+        # iN — blue info token (a numeric info token is always blue)
         try:
             value = int(rest)
         except ValueError:
             raise ValueError(f"Invalid info token value: {token!r}")
-        return Slot(wire=None, state=SlotState.INFO_REVEALED,
-                    info_token=value)
+        return Slot(
+            wire=Wire(WireColor.BLUE, float(value)),
+            state=SlotState.INFO_REVEALED,
+            info_token=value,
+        )
 
     # HIDDEN: starts with '?'
     if token[0] == "?":
@@ -425,6 +460,8 @@ class TileStand:
             ?RN     — HIDDEN red wire known to observer (e.g., ``?R5``)
             iN      — INFO_REVEALED with blue info token (e.g., ``i5``)
             iY      — INFO_REVEALED with yellow info token
+            iYN     — INFO_REVEALED yellow, observer knows exact wire
+                      (e.g., ``iY4``)
 
         All prefixes (``Y``, ``R``, ``i``, ``?``) are case-insensitive.
 
@@ -600,14 +637,47 @@ class TileStand:
 # Helper: Sort Value Bounds
 # =============================================================================
 
+def _slot_sort_value(slot: Slot) -> float | None:
+    """Extract a sort_value from a publicly visible slot.
+
+    Returns the sort_value for CUT or INFO_REVEALED slots that have
+    a known wire identity. For INFO_REVEALED slots in calculator mode
+    (wire is None), falls back to the info_token value when it's a
+    blue numeric token (sort_value = float(info_token)).
+
+    HIDDEN slots always return None regardless of wire identity,
+    because the observer cannot see hidden wires on other players'
+    stands.
+
+    Args:
+        slot: The slot to inspect.
+
+    Returns:
+        The inferred sort_value, or None if not determinable.
+    """
+    if slot.state == SlotState.HIDDEN:
+        return None
+    if slot.wire is not None:
+        return slot.wire.sort_value
+    # Calculator mode: wire is None but info_token may give the value.
+    # A numeric info token is always blue (sort_value = N.0).
+    if (
+        slot.state == SlotState.INFO_REVEALED
+        and isinstance(slot.info_token, int)
+    ):
+        return float(slot.info_token)
+    return None
+
+
 def get_sort_value_bounds(
     slots: list[Slot], slot_index: int
 ) -> tuple[float, float]:
     """Get the sort_value bounds for a hidden slot based on known neighbors.
 
     Scans left and right from the given slot index to find the nearest
-    known wire (CUT or INFO_REVEALED with a known wire) to establish
-    the valid range of sort_values for the hidden slot.
+    known wire (CUT or INFO_REVEALED with a known wire or blue info
+    token) to establish the valid range of sort_values for the hidden
+    slot.
 
     Args:
         slots: The list of slots from a tile stand.
@@ -625,16 +695,16 @@ def get_sort_value_bounds(
     # HIDDEN slots are skipped even if they contain a wire (simulation mode),
     # because the observer cannot see hidden wires on other players' stands.
     for i in range(slot_index - 1, -1, -1):
-        slot = slots[i]
-        if slot.wire is not None and slot.state != SlotState.HIDDEN:
-            lower = slot.wire.sort_value
+        sv = _slot_sort_value(slots[i])
+        if sv is not None:
+            lower = sv
             break
 
     # Scan right for nearest publicly visible wire
     for i in range(slot_index + 1, len(slots)):
-        slot = slots[i]
-        if slot.wire is not None and slot.state != SlotState.HIDDEN:
-            upper = slot.wire.sort_value
+        sv = _slot_sort_value(slots[i])
+        if sv is not None:
+            upper = sv
             break
 
     return (lower, upper)
@@ -1437,21 +1507,21 @@ class GameState:
         if target_player_index == actor_index:
             raise ValueError("Cannot dual cut your own wires")
 
-        # Validate actor has a matching wire
+        # Validate actor has a matching uncut wire (hidden or info-revealed)
         actor_matching_slots = [
             (i, s) for i, s in enumerate(actor.tile_stand.slots)
-            if s.is_hidden and s.wire is not None
+            if not s.is_cut and s.wire is not None
             and s.wire.gameplay_value == guessed_value
         ]
         if not actor_matching_slots:
             raise ValueError(
-                f"Active player has no hidden wire with value {guessed_value}"
+                f"Active player has no uncut wire with value {guessed_value}"
             )
 
-        # Validate target slot
+        # Validate target slot (allow HIDDEN and INFO_REVEALED, reject CUT)
         target_slot = target.tile_stand.slots[target_slot_index]
-        if not target_slot.is_hidden:
-            raise ValueError(f"Target slot {target_slot_index} is not hidden")
+        if target_slot.is_cut:
+            raise ValueError(f"Target slot {target_slot_index} is already cut")
 
         # Handle Double Detector
         if is_double_detector:
@@ -1464,9 +1534,9 @@ class GameState:
             if second_target_slot_index is None:
                 raise ValueError("Double Detector requires a second target slot")
             second_slot = target.tile_stand.slots[second_target_slot_index]
-            if not second_slot.is_hidden:
+            if second_slot.is_cut:
                 raise ValueError(
-                    f"Second target slot {second_target_slot_index} is not hidden"
+                    f"Second target slot {second_target_slot_index} is already cut"
                 )
             # Cannot use DD with YELLOW or RED guesses
             if isinstance(guessed_value, str):
