@@ -15,11 +15,6 @@ INCLUDE_DOUBLE_DETECTOR = True
 
 # ── Wire helpers ────────────────────────────────────────────
 
-def _blue(n: int) -> bomb_busters.Wire:
-    """Create a blue wire with value n."""
-    return bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(n))
-
-
 def _yellow(n: int) -> bomb_busters.Wire:
     """Create a yellow wire with sort value n.1."""
     return bomb_busters.Wire(bomb_busters.WireColor.YELLOW, n + 0.1)
@@ -28,32 +23,6 @@ def _yellow(n: int) -> bomb_busters.Wire:
 def _red(n: int) -> bomb_busters.Wire:
     """Create a red wire with sort value n.5."""
     return bomb_busters.Wire(bomb_busters.WireColor.RED, n + 0.5)
-
-
-# ── Slot helpers ────────────────────────────────────────────
-
-def _cut(wire: bomb_busters.Wire) -> bomb_busters.Slot:
-    """A cut (face-up) slot with a known wire."""
-    return bomb_busters.Slot(
-        wire=wire, state=bomb_busters.SlotState.CUT,
-    )
-
-
-def _hidden(wire: bomb_busters.Wire | None = None) -> bomb_busters.Slot:
-    """A hidden (face-down) slot. Wire is None for unknown slots."""
-    return bomb_busters.Slot(
-        wire=wire, state=bomb_busters.SlotState.HIDDEN,
-    )
-
-
-def _info(
-    token: int | str, wire: bomb_busters.Wire | None = None,
-) -> bomb_busters.Slot:
-    """An info-revealed slot from a failed dual cut."""
-    return bomb_busters.Slot(
-        wire=wire, state=bomb_busters.SlotState.INFO_REVEALED,
-        info_token=token,
-    )
 
 
 # ── Main ────────────────────────────────────────────────────
@@ -113,9 +82,10 @@ def main() -> None:
 
     # ── Turn history ──────────────────────────────────────────
     # Diana's slot E has an info token from a prior failed dual cut
-    # (entered directly via _info() above). The detonator advanced
-    # once. No history record is needed — the info token and
-    # detonator state are set directly in calculator mode.
+    # (entered directly via "i6" in her stand notation below). The
+    # detonator advanced once. No history record is needed — the
+    # info token and detonator state are set directly in calculator
+    # mode.
     history = bomb_busters.TurnHistory()
 
     # ── Character cards ─────────────────────────────────────
@@ -129,78 +99,32 @@ def main() -> None:
     # Hidden: B4, Y4, B6, B7, B8×2  |  Cut: B1, B2, B9, B11, B12
     # Solo cut available: blue-8 (all other B8s are cut)
     # Dual cut values: 4, YELLOW, 6, 7
-    alice_stand = [
-        _cut(_blue(1)),        # A
-        _cut(_blue(2)),        # B
-        _hidden(_blue(4)),     # C
-        _hidden(_yellow(4)),   # D — yellow wire
-        _hidden(_blue(6)),     # E
-        _hidden(_blue(7)),     # F
-        _hidden(_blue(8)),     # G — solo cut pair
-        _hidden(_blue(8)),     # H — solo cut pair
-        _cut(_blue(9)),        # I
-        _cut(_blue(11)),       # J
-        _cut(_blue(12)),       # K
-    ]
+    alice_stand = bomb_busters.TileStand.from_string(
+        "1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12", num_tiles=11,
+    ).slots
 
     # Bob (P1) — 5 cut, 5 hidden (unknown to Alice)
-    bob_stand = [
-        _cut(_blue(1)),   # A
-        _cut(_blue(3)),   # B
-        _hidden(),        # C — B4
-        _hidden(),        # D — B5
-        _hidden(),        # E — B7
-        _cut(_blue(8)),   # F
-        _cut(_blue(9)),   # G
-        _hidden(),        # H — B10
-        _hidden(),        # I — B11
-        _cut(_blue(12)),  # J
-    ]
+    bob_stand = bomb_busters.TileStand.from_string(
+        "1 3 ? ? ? 8 9 ? ? 12", num_tiles=10,
+    ).slots
 
     # Charlie (P2) — 5 cut, 5 hidden (unknown to Alice)
-    charlie_stand = [
-        _cut(_blue(2)),   # A
-        _cut(_blue(3)),   # B
-        _hidden(),        # C — B4
-        _hidden(),        # D — B6
-        _hidden(),        # E — B7
-        _cut(_blue(8)),   # F
-        _cut(_blue(9)),   # G
-        _hidden(),        # H — B10
-        _hidden(),        # I — B11
-        _cut(_blue(12)),  # J
-    ]
+    charlie_stand = bomb_busters.TileStand.from_string(
+        "2 3 ? ? ? 8 9 ? ? 12", num_tiles=10,
+    ).slots
 
     # Diana (P3) — 4 cut, 1 info-revealed, 5 hidden
     # Slot E has an info token showing blue-6 (from Eve's
     # failed dual cut guessing blue-7).
     # The red wire R5.5 lurks in slot D (unknown to Alice).
-    diana_stand = [
-        _cut(_blue(2)),        # A
-        _cut(_blue(3)),        # B
-        _hidden(),             # C — B5
-        _hidden(),             # D — R5.5 (red wire!)
-        _info(6, _blue(6)),    # E — info: blue-6
-        _hidden(),             # F — B7
-        _hidden(),             # G — Y7.1
-        _cut(_blue(9)),        # H
-        _hidden(),             # I — B10
-        _cut(_blue(11)),       # J
-    ]
+    diana_stand = bomb_busters.TileStand.from_string(
+        "2 3 ? ? i6 ? ? 9 ? 11", num_tiles=10,
+    ).slots
 
     # Eve (P4) — 3 cut, 7 hidden (unknown to Alice)
-    eve_stand = [
-        _cut(_blue(1)),   # A
-        _hidden(),        # B — B1
-        _hidden(),        # C — B2
-        _cut(_blue(3)),   # D
-        _hidden(),        # E — B4
-        _hidden(),        # F — B5
-        _hidden(),        # G — B5
-        _hidden(),        # H — B6
-        _hidden(),        # I — B10
-        _cut(_blue(12)),  # J
-    ]
+    eve_stand = bomb_busters.TileStand.from_string(
+        "1 ? ? 3 ? ? ? ? ? 12", num_tiles=10,
+    ).slots
 
     # ── Create game state ───────────────────────────────────
     game = bomb_busters.GameState.from_partial_state(
@@ -224,7 +148,7 @@ def main() -> None:
 
     # ── Probability analysis ────────────────────────────────
     compute_probabilities.print_probability_analysis(
-        game, observer_index=0, max_moves=10,
+        game, observer_index=0, max_moves=20,
         include_dd=INCLUDE_DOUBLE_DETECTOR,
     )
 

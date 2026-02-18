@@ -281,6 +281,193 @@ class TestTileStand(unittest.TestCase):
         self.assertIn("B", letters)
 
 
+class TestTileStandFromString(unittest.TestCase):
+    """Tests for TileStand.from_string() shorthand notation."""
+
+    # -- CUT wires (no prefix) --
+
+    def test_cut_blue_wires(self) -> None:
+        """Plain numbers produce CUT blue wires."""
+        stand = bomb_busters.TileStand.from_string("1 5 12")
+        self.assertEqual(len(stand.slots), 3)
+        for slot in stand.slots:
+            self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+            self.assertEqual(slot.wire.color, bomb_busters.WireColor.BLUE)
+        self.assertEqual(stand.slots[0].wire.sort_value, 1.0)
+        self.assertEqual(stand.slots[1].wire.sort_value, 5.0)
+        self.assertEqual(stand.slots[2].wire.sort_value, 12.0)
+
+    def test_cut_yellow_wire(self) -> None:
+        """'Y' prefix produces a CUT yellow wire."""
+        stand = bomb_busters.TileStand.from_string("Y4")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(slot.wire.sort_value, 4.1)
+
+    def test_cut_red_wire(self) -> None:
+        """'R' prefix produces a CUT red wire."""
+        stand = bomb_busters.TileStand.from_string("R5")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.RED)
+        self.assertEqual(slot.wire.sort_value, 5.5)
+
+    # -- HIDDEN wires ('?' prefix) --
+
+    def test_hidden_unknown(self) -> None:
+        """'?' alone produces a HIDDEN slot with wire=None."""
+        stand = bomb_busters.TileStand.from_string("? ? ?")
+        self.assertEqual(len(stand.slots), 3)
+        for slot in stand.slots:
+            self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+            self.assertIsNone(slot.wire)
+
+    def test_hidden_known_blue(self) -> None:
+        """'?N' produces a HIDDEN blue wire known to observer."""
+        stand = bomb_busters.TileStand.from_string("?4 ?8")
+        self.assertEqual(len(stand.slots), 2)
+        for slot in stand.slots:
+            self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+            self.assertEqual(slot.wire.color, bomb_busters.WireColor.BLUE)
+        self.assertEqual(stand.slots[0].wire.sort_value, 4.0)
+        self.assertEqual(stand.slots[1].wire.sort_value, 8.0)
+
+    def test_hidden_yellow(self) -> None:
+        """'?YN' produces a HIDDEN yellow wire."""
+        stand = bomb_busters.TileStand.from_string("?Y4")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(slot.wire.sort_value, 4.1)
+
+    def test_hidden_red(self) -> None:
+        """'?RN' produces a HIDDEN red wire."""
+        stand = bomb_busters.TileStand.from_string("?R5")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.RED)
+        self.assertEqual(slot.wire.sort_value, 5.5)
+
+    # -- INFO_REVEALED wires ('i' prefix) --
+
+    def test_info_blue(self) -> None:
+        """'iN' produces INFO_REVEALED with blue info token."""
+        stand = bomb_busters.TileStand.from_string("i5")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.info_token, 5)
+
+    def test_info_yellow(self) -> None:
+        """'iY' produces INFO_REVEALED with yellow info token."""
+        stand = bomb_busters.TileStand.from_string("iY")
+        slot = stand.slots[0]
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.info_token, "YELLOW")
+
+    # -- Case insensitivity --
+
+    def test_case_insensitive(self) -> None:
+        """Prefixes Y, R, i are case-insensitive."""
+        stand = bomb_busters.TileStand.from_string("y4 r5 iy i5")
+        self.assertEqual(stand.slots[0].wire.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(stand.slots[0].state, bomb_busters.SlotState.CUT)
+        self.assertEqual(stand.slots[1].wire.color, bomb_busters.WireColor.RED)
+        self.assertEqual(stand.slots[1].state, bomb_busters.SlotState.CUT)
+        self.assertEqual(stand.slots[2].info_token, "YELLOW")
+        self.assertEqual(stand.slots[3].info_token, 5)
+
+    # -- Mixed stands (simulate.py examples) --
+
+    def test_alice_stand(self) -> None:
+        """Observer's own stand: mix of cut and hidden-known wires."""
+        stand = bomb_busters.TileStand.from_string(
+            "1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12",
+        )
+        self.assertEqual(len(stand.slots), 11)
+        # Cut slots: indices 0,1,8,9,10
+        for i in (0, 1, 8, 9, 10):
+            self.assertEqual(stand.slots[i].state, bomb_busters.SlotState.CUT)
+        # Hidden slots: indices 2,3,4,5,6,7
+        for i in (2, 3, 4, 5, 6, 7):
+            self.assertEqual(stand.slots[i].state, bomb_busters.SlotState.HIDDEN)
+            self.assertIsNotNone(stand.slots[i].wire)
+        # Yellow wire at index 3
+        self.assertEqual(
+            stand.slots[3].wire.color, bomb_busters.WireColor.YELLOW,
+        )
+        self.assertEqual(stand.slots[3].wire.sort_value, 4.1)
+
+    def test_bob_stand(self) -> None:
+        """Other player's stand: mix of cut and unknown hidden wires."""
+        stand = bomb_busters.TileStand.from_string("1 3 ? ? ? 8 9 ? ? 12")
+        self.assertEqual(len(stand.slots), 10)
+        # Cut slots
+        for i in (0, 1, 5, 6, 9):
+            self.assertEqual(stand.slots[i].state, bomb_busters.SlotState.CUT)
+        # Hidden unknown slots
+        for i in (2, 3, 4, 7, 8):
+            self.assertEqual(stand.slots[i].state, bomb_busters.SlotState.HIDDEN)
+            self.assertIsNone(stand.slots[i].wire)
+
+    def test_diana_stand_with_info_token(self) -> None:
+        """Stand with an info token among cut and hidden wires."""
+        stand = bomb_busters.TileStand.from_string("2 3 ? ? i6 ? ? 9 ? 11")
+        self.assertEqual(len(stand.slots), 10)
+        # Info-revealed at index 4
+        self.assertEqual(
+            stand.slots[4].state, bomb_busters.SlotState.INFO_REVEALED,
+        )
+        self.assertEqual(stand.slots[4].info_token, 6)
+        self.assertIsNone(stand.slots[4].wire)
+
+    # -- Custom separator --
+
+    def test_custom_separator(self) -> None:
+        """sep parameter changes the token delimiter."""
+        stand = bomb_busters.TileStand.from_string("1,2,3", sep=",")
+        self.assertEqual(len(stand.slots), 3)
+        for slot in stand.slots:
+            self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+            self.assertEqual(slot.wire.color, bomb_busters.WireColor.BLUE)
+
+    # -- num_tiles validation --
+
+    def test_num_tiles_correct(self) -> None:
+        """num_tiles passes when count matches."""
+        stand = bomb_busters.TileStand.from_string("1 2 3", num_tiles=3)
+        self.assertEqual(len(stand.slots), 3)
+
+    def test_num_tiles_mismatch(self) -> None:
+        """num_tiles raises ValueError when count doesn't match."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("1 2 3", num_tiles=5)
+
+    # -- Error cases --
+
+    def test_empty_string(self) -> None:
+        """Empty notation raises ValueError."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("")
+
+    def test_whitespace_only(self) -> None:
+        """Whitespace-only notation raises ValueError."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("   ")
+
+    def test_invalid_token(self) -> None:
+        """Unrecognizable token raises ValueError."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("1 abc 3")
+
+    def test_info_token_missing_value(self) -> None:
+        """Bare 'i' with no value raises ValueError."""
+        with self.assertRaises(ValueError):
+            bomb_busters.TileStand.from_string("i")
+
+
 class TestSortValueBounds(unittest.TestCase):
     """Tests for the bomb_busters.get_sort_value_bounds helper."""
 

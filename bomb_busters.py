@@ -278,6 +278,103 @@ class Slot:
 
 
 # =============================================================================
+# Slot Parsing Helper
+# =============================================================================
+
+def _parse_wire_value(token: str) -> Wire:
+    """Parse a wire value string into a Wire object.
+
+    Handles blue (plain number), yellow (Y/y prefix), and red (R/r prefix).
+
+    Args:
+        token: A string like "5", "Y4", "R5" (case-insensitive prefix).
+
+    Returns:
+        The corresponding Wire object.
+
+    Raises:
+        ValueError: If the token cannot be parsed as a wire value.
+    """
+    upper = token.upper()
+    if upper.startswith("Y"):
+        num_str = token[1:]
+        try:
+            n = int(num_str)
+        except ValueError:
+            raise ValueError(f"Invalid yellow wire number: {token!r}")
+        return Wire(WireColor.YELLOW, n + 0.1)
+    elif upper.startswith("R"):
+        num_str = token[1:]
+        try:
+            n = int(num_str)
+        except ValueError:
+            raise ValueError(f"Invalid red wire number: {token!r}")
+        return Wire(WireColor.RED, n + 0.5)
+    else:
+        try:
+            n = int(token)
+        except ValueError:
+            raise ValueError(f"Invalid blue wire number: {token!r}")
+        return Wire(WireColor.BLUE, float(n))
+
+
+def _parse_slot_token(token: str) -> Slot:
+    """Parse a single shorthand token into a Slot object.
+
+    Token formats:
+        N       — CUT blue wire (e.g., "5", "12")
+        YN      — CUT yellow wire (e.g., "Y4")
+        RN      — CUT red wire (e.g., "R5")
+        ?       — HIDDEN unknown wire
+        ?N      — HIDDEN blue wire (e.g., "?4")
+        ?YN     — HIDDEN yellow wire (e.g., "?Y4")
+        ?RN     — HIDDEN red wire (e.g., "?R5")
+        iN      — INFO_REVEALED blue info token (e.g., "i5")
+        iY      — INFO_REVEALED yellow info token (e.g., "iY")
+
+    Prefixes are case-insensitive.
+
+    Args:
+        token: The shorthand string for a single slot.
+
+    Returns:
+        A Slot object with the appropriate state and wire/info_token.
+
+    Raises:
+        ValueError: If the token cannot be parsed.
+    """
+    if not token:
+        raise ValueError("Empty slot token")
+
+    # INFO_REVEALED: starts with 'i' or 'I'
+    if token[0] in ("i", "I"):
+        rest = token[1:]
+        if not rest:
+            raise ValueError(f"Info token missing value: {token!r}")
+        if rest.upper() == "Y":
+            return Slot(wire=None, state=SlotState.INFO_REVEALED,
+                        info_token="YELLOW")
+        try:
+            value = int(rest)
+        except ValueError:
+            raise ValueError(f"Invalid info token value: {token!r}")
+        return Slot(wire=None, state=SlotState.INFO_REVEALED,
+                    info_token=value)
+
+    # HIDDEN: starts with '?'
+    if token[0] == "?":
+        rest = token[1:]
+        if not rest:
+            return Slot(wire=None, state=SlotState.HIDDEN)
+        wire = _parse_wire_value(rest)
+        return Slot(wire=wire, state=SlotState.HIDDEN)
+
+    # CUT: plain wire value
+    wire = _parse_wire_value(token)
+    return Slot(wire=wire, state=SlotState.CUT)
+
+
+# =============================================================================
 # TileStand
 # =============================================================================
 
@@ -305,6 +402,69 @@ class TileStand:
         """
         sorted_wires = sorted(wires)
         slots = [Slot(wire=w) for w in sorted_wires]
+        return cls(slots=slots)
+
+    @classmethod
+    def from_string(
+        cls,
+        notation: str,
+        sep: str = " ",
+        num_tiles: int | None = None,
+    ) -> TileStand:
+        """Create a tile stand from shorthand string notation.
+
+        Supports quick entry of game states. Tokens are separated by
+        ``sep`` (default space). Each token describes one slot:
+
+            N       — CUT blue wire (e.g., ``5``, ``12``)
+            YN      — CUT yellow wire (e.g., ``Y4``)
+            RN      — CUT red wire (e.g., ``R5``)
+            ?       — HIDDEN unknown wire
+            ?N      — HIDDEN blue wire known to observer (e.g., ``?4``)
+            ?YN     — HIDDEN yellow wire known to observer (e.g., ``?Y4``)
+            ?RN     — HIDDEN red wire known to observer (e.g., ``?R5``)
+            iN      — INFO_REVEALED with blue info token (e.g., ``i5``)
+            iY      — INFO_REVEALED with yellow info token
+
+        All prefixes (``Y``, ``R``, ``i``, ``?``) are case-insensitive.
+
+        Args:
+            notation: The shorthand string describing the tile stand.
+            sep: Token separator (default ``" "``).
+            num_tiles: If provided, validates that the parsed tile count
+                matches this value exactly.
+
+        Returns:
+            A new TileStand with slots in the order given.
+
+        Raises:
+            ValueError: If a token cannot be parsed, the notation is
+                empty, or ``num_tiles`` doesn't match the parsed count.
+
+        Examples:
+            Observer's own stand (hidden wires known)::
+
+                TileStand.from_string("1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12")
+
+            Another player's stand (hidden wires unknown)::
+
+                TileStand.from_string("1 3 ? ? ? 8 9 ? ? 12")
+
+            Stand with an info token::
+
+                TileStand.from_string("2 3 ? ? i6 ? ? 9 ? 11")
+        """
+        if not notation or not notation.strip():
+            raise ValueError("Notation string is empty")
+        tokens = notation.split(sep)
+        tokens = [t for t in tokens if t]
+        if not tokens:
+            raise ValueError("Notation string contains no tokens")
+        if num_tiles is not None and len(tokens) != num_tiles:
+            raise ValueError(
+                f"Expected {num_tiles} tiles, got {len(tokens)}"
+            )
+        slots = [_parse_slot_token(t) for t in tokens]
         return cls(slots=slots)
 
     @property

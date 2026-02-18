@@ -210,7 +210,7 @@ Bomb Busters FAQ.pdf         # Official FAQ
 
 **`Slot`** — A single position on a tile stand. Holds a `Wire` (or `None` in calculator mode), a `SlotState`, and an optional `info_token` value.
 
-**`TileStand`** — A player's wire rack. Slots are always sorted ascending by `sort_value`. Wires stay in position even after being cut. Properties: `hidden_slots`, `cut_slots`, `is_empty`, `remaining_count`.
+**`TileStand`** — A player's wire rack. Slots are always sorted ascending by `sort_value`. Wires stay in position even after being cut. Factory methods: `from_wires()` for simulation mode, `from_string()` for quick entry from shorthand notation. Properties: `hidden_slots`, `cut_slots`, `is_empty`, `remaining_count`.
 
 **`Player`** — A bomb disposal expert with a `TileStand` and optional `CharacterCard`.
 
@@ -374,6 +374,65 @@ from compute_probabilities import rank_all_moves
 moves = rank_all_moves(game, observer_index=0)
 for move in moves[:5]:
     print(move)
+```
+
+#### `TileStand.from_string(notation, sep, num_tiles)`
+
+Create a tile stand from shorthand string notation for quick mid-game entry. Each token in the string describes one slot on the stand. This is the fastest way to enter a game state for probability calculations.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `notation` | `str` | The shorthand string describing the tile stand. |
+| `sep` | `str` | Token separator (default `" "`). |
+| `num_tiles` | `int \| None` | If provided, validates that the parsed tile count matches exactly. |
+
+**Returns:** A `TileStand` with slots in the order given.
+
+**Raises:** `ValueError` if a token cannot be parsed, the notation is empty, or `num_tiles` doesn't match.
+
+**Token reference:**
+
+| Token | State | Meaning | Example |
+|-------|-------|---------|---------|
+| `N` | CUT | Blue wire with value N | `5` → cut blue-5 |
+| `YN` | CUT | Yellow wire at sort position N | `Y4` → cut yellow-4 |
+| `RN` | CUT | Red wire at sort position N | `R5` → cut red-5 |
+| `?` | HIDDEN | Unknown wire (other player's hidden) | `?` → unknown |
+| `?N` | HIDDEN | Blue wire known to observer | `?4` → hidden blue-4 |
+| `?YN` | HIDDEN | Yellow wire known to observer | `?Y4` → hidden yellow-4 |
+| `?RN` | HIDDEN | Red wire known to observer | `?R5` → hidden red-5 |
+| `iN` | INFO_REVEALED | Blue info token from failed dual cut | `i5` → info blue-5 |
+| `iY` | INFO_REVEALED | Yellow info token from failed dual cut | `iY` → info yellow |
+
+All prefixes (`Y`, `R`, `i`, `?`) are case-insensitive.
+
+**Examples:**
+
+```python
+import bomb_busters
+
+# Observer's own stand — all wires known (use ?N for hidden, N for cut)
+alice = bomb_busters.TileStand.from_string(
+    "1 2 ?4 ?Y4 ?6 ?7 ?8 ?8 9 11 12", num_tiles=11,
+)
+
+# Another player's stand — hidden wires unknown to observer
+bob = bomb_busters.TileStand.from_string("1 3 ? ? ? 8 9 ? ? 12")
+
+# Stand with an info token from a failed dual cut
+diana = bomb_busters.TileStand.from_string("2 3 ? ? i6 ? ? 9 ? 11")
+
+# Use with from_partial_state (extract .slots for the stands parameter)
+game = bomb_busters.GameState.from_partial_state(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    stands=[alice.slots, bob.slots, ...],
+    wires_in_play=bomb_busters.create_all_blue_wires(),
+)
+
+# Custom separator
+stand = bomb_busters.TileStand.from_string("1,2,?3,4", sep=",")
 ```
 
 ### Probability Engine (`compute_probabilities.py`)
