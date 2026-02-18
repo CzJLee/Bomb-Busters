@@ -782,67 +782,6 @@ class Detonator:
 
 
 # =============================================================================
-# InfoTokenPool
-# =============================================================================
-
-@dataclasses.dataclass
-class InfoTokenPool:
-    """Pool of available info tokens.
-
-    There are 2 tokens per blue number (1-12) and 2 yellow tokens,
-    totaling 26 tokens.
-
-    Attributes:
-        blue_tokens: Dict mapping blue values (1-12) to available count.
-        yellow_tokens: Number of available yellow info tokens.
-    """
-    blue_tokens: dict[int, int] = dataclasses.field(default_factory=dict)
-    yellow_tokens: int = 2
-
-    @classmethod
-    def create_full(cls) -> InfoTokenPool:
-        """Create a full pool of 26 info tokens.
-
-        Returns:
-            An InfoTokenPool with 2 of each blue (1-12) and 2 yellow.
-        """
-        return cls(
-            blue_tokens={n: 2 for n in range(1, 13)},
-            yellow_tokens=2,
-        )
-
-    def use_blue_token(self, value: int) -> bool:
-        """Use a blue info token of the given value.
-
-        Args:
-            value: The blue wire value (1-12).
-
-        Returns:
-            True if a token was available and used, False if none available.
-        """
-        if self.blue_tokens.get(value, 0) > 0:
-            self.blue_tokens[value] -= 1
-            return True
-        return False
-
-    def use_yellow_token(self) -> bool:
-        """Use a yellow info token.
-
-        Returns:
-            True if a token was available and used, False if none available.
-        """
-        if self.yellow_tokens > 0:
-            self.yellow_tokens -= 1
-            return True
-        return False
-
-    def __str__(self) -> str:
-        used_blue = sum(2 - v for v in self.blue_tokens.values())
-        used_yellow = 2 - self.yellow_tokens
-        return f"Info tokens: {used_blue}/24 blue used, {used_yellow}/2 yellow used"
-
-
-# =============================================================================
 # Marker
 # =============================================================================
 
@@ -1107,7 +1046,6 @@ class GameState:
     Attributes:
         players: List of all players in the game.
         detonator: The detonator dial tracking failures.
-        info_token_pool: Available info tokens.
         validation_tokens: Set of blue wire values (1-12) where all 4 are cut.
         markers: Board markers for red/yellow wires in play.
         equipment: List of equipment cards in the game.
@@ -1122,7 +1060,6 @@ class GameState:
     """
     players: list[Player]
     detonator: Detonator
-    info_token_pool: InfoTokenPool
     validation_tokens: set[int]
     markers: list[Marker]
     equipment: list[Equipment]
@@ -1230,7 +1167,6 @@ class GameState:
         return cls(
             players=players,
             detonator=Detonator(max_failures=player_count - 1),
-            info_token_pool=InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=markers,
             equipment=[],
@@ -1300,7 +1236,6 @@ class GameState:
                 failures=detonator_failures,
                 max_failures=player_count - 1,
             ),
-            info_token_pool=InfoTokenPool.create_full(),
             validation_tokens=validation_tokens or set(),
             markers=markers or [],
             equipment=equipment or [],
@@ -1472,10 +1407,6 @@ class GameState:
 
                         if non_red_wire is not None:
                             token_val = non_red_wire.gameplay_value
-                            if isinstance(token_val, int):
-                                self.info_token_pool.use_blue_token(token_val)
-                            else:
-                                self.info_token_pool.use_yellow_token()
                             target.tile_stand.place_info_token(
                                 non_red_index, token_val
                             )
@@ -1517,10 +1448,6 @@ class GameState:
 
                 # Place info token
                 token_val = target_wire.gameplay_value
-                if isinstance(token_val, int):
-                    self.info_token_pool.use_blue_token(token_val)
-                else:
-                    self.info_token_pool.use_yellow_token()
                 target.tile_stand.place_info_token(
                     target_slot_index, token_val
                 )

@@ -218,8 +218,6 @@ Bomb Busters FAQ.pdf         # Official FAQ
 
 **`Detonator`** — The bomb's failure counter. With N players, N-1 failures are tolerated. Tracks `failures`, `max_failures`, `is_exploded`, `remaining_failures`.
 
-**`InfoTokenPool`** — Pool of 26 info tokens (2 per blue value 1-12, plus 2 yellow). Tokens are consumed on failed dual cuts.
-
 **`Marker`** — Board marker for red/yellow wires in play. State is `KNOWN` (direct inclusion) or `UNCERTAIN` ("X of Y" selection mode).
 
 **`Equipment`** — Extensible equipment card with `unlock_value` (unlocked when 2 wires of that value are cut) and `used` tracking.

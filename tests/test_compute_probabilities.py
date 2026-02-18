@@ -36,7 +36,6 @@ def _make_known_game(
             failures=detonator_failures,
             max_failures=len(hands) - 1,
         ),
-        info_token_pool=bomb_busters.InfoTokenPool.create_full(),
         validation_tokens=set(),
         markers=[],
         equipment=[],
@@ -1483,7 +1482,6 @@ class TestBlueWireSubset(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(failures=0, max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1587,7 +1585,6 @@ class TestBlueWireSubset(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(failures=0, max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[
                 bomb_busters.Marker(

@@ -644,30 +644,6 @@ class TestDetonator(unittest.TestCase):
         self.assertIn("3", output)
 
 
-class TestInfoTokenPool(unittest.TestCase):
-    """Tests for the bomb_busters.InfoTokenPool class."""
-
-    def test_create_full(self) -> None:
-        pool = bomb_busters.InfoTokenPool.create_full()
-        self.assertEqual(pool.yellow_tokens, 2)
-        for n in range(1, 13):
-            self.assertEqual(pool.blue_tokens[n], 2)
-
-    def test_use_blue_token(self) -> None:
-        pool = bomb_busters.InfoTokenPool.create_full()
-        self.assertTrue(pool.use_blue_token(5))
-        self.assertEqual(pool.blue_tokens[5], 1)
-        self.assertTrue(pool.use_blue_token(5))
-        self.assertEqual(pool.blue_tokens[5], 0)
-        self.assertFalse(pool.use_blue_token(5))
-
-    def test_use_yellow_token(self) -> None:
-        pool = bomb_busters.InfoTokenPool.create_full()
-        self.assertTrue(pool.use_yellow_token())
-        self.assertTrue(pool.use_yellow_token())
-        self.assertFalse(pool.use_yellow_token())
-
-
 class TestEquipment(unittest.TestCase):
     """Tests for the bomb_busters.Equipment class."""
 
@@ -1020,7 +996,6 @@ class TestDualCutExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1093,7 +1068,6 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1137,7 +1111,6 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[bomb_busters.Marker(bomb_busters.WireColor.RED, 1.5, bomb_busters.MarkerState.KNOWN)],
             equipment=[],
@@ -1205,7 +1178,6 @@ class TestDualCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1249,7 +1221,6 @@ class TestDoubleDectectorExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1351,7 +1322,6 @@ class TestSoloCutExecution(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1401,7 +1371,6 @@ class TestSoloCutExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1433,7 +1402,6 @@ class TestRevealRedExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1462,7 +1430,6 @@ class TestRevealRedExecution(unittest.TestCase):
         game = bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
@@ -1494,7 +1461,6 @@ class TestGameStateHelpers(unittest.TestCase):
         return bomb_busters.GameState(
             players=players,
             detonator=bomb_busters.Detonator(max_failures=3),
-            info_token_pool=bomb_busters.InfoTokenPool.create_full(),
             validation_tokens=set(),
             markers=[],
             equipment=[],
