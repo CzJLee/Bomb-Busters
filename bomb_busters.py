@@ -1031,6 +1031,101 @@ class WireConfig:
 
 
 # =============================================================================
+# UncertainWireGroup
+# =============================================================================
+
+@dataclasses.dataclass
+class UncertainWireGroup:
+    """A group of colored wires with uncertain inclusion from X-of-Y setup.
+
+    In X-of-Y mode during mission setup, Y candidate wires are drawn
+    but only X are kept and shuffled into the game. Players see UNCERTAIN
+    markers for all Y candidates but don't know which X are in play.
+
+    Use this with ``from_partial_state`` to represent the uncertainty.
+    The probability engine's constraint solver uses "discard slots"
+    (slack variables) to enumerate which candidates are in the game.
+
+    Attributes:
+        candidates: All Wire objects that might be in play (the Y drawn).
+        count_in_play: How many candidates are actually in the game
+            (the X in "X of Y").
+    """
+    candidates: list[Wire]
+    count_in_play: int
+
+    def __post_init__(self) -> None:
+        """Validate uncertain wire group constraints."""
+        if not self.candidates:
+            raise ValueError("Candidates list must not be empty")
+        colors = {w.color for w in self.candidates}
+        if len(colors) != 1:
+            raise ValueError(
+                "All candidates must be the same color"
+            )
+        color = next(iter(colors))
+        if color == WireColor.BLUE:
+            raise ValueError(
+                "UncertainWireGroup is only for RED and YELLOW wires"
+            )
+        if color == WireColor.YELLOW and not (0 <= self.count_in_play <= 4):
+            raise ValueError(
+                f"Yellow wire count_in_play must be 0-4, "
+                f"got {self.count_in_play}"
+            )
+        if color == WireColor.RED and not (0 <= self.count_in_play <= 3):
+            raise ValueError(
+                f"Red wire count_in_play must be 0-3, "
+                f"got {self.count_in_play}"
+            )
+        if self.count_in_play > len(self.candidates):
+            raise ValueError(
+                f"count_in_play ({self.count_in_play}) cannot exceed "
+                f"number of candidates ({len(self.candidates)})"
+            )
+
+    @property
+    def color(self) -> WireColor:
+        """The color of all candidate wires."""
+        return self.candidates[0].color
+
+    @property
+    def discard_count(self) -> int:
+        """Number of candidates NOT in the game."""
+        return len(self.candidates) - self.count_in_play
+
+    @classmethod
+    def yellow(cls, numbers: list[int], count: int) -> UncertainWireGroup:
+        """Create a yellow uncertain group from base numbers.
+
+        Args:
+            numbers: Base numbers of the yellow wires drawn
+                (e.g., ``[2, 3, 9]``).
+            count: How many are actually in the game.
+
+        Returns:
+            An UncertainWireGroup for yellow wires.
+        """
+        candidates = [Wire(WireColor.YELLOW, n + 0.1) for n in numbers]
+        return cls(candidates=candidates, count_in_play=count)
+
+    @classmethod
+    def red(cls, numbers: list[int], count: int) -> UncertainWireGroup:
+        """Create a red uncertain group from base numbers.
+
+        Args:
+            numbers: Base numbers of the red wires drawn
+                (e.g., ``[3, 7]``).
+            count: How many are actually in the game.
+
+        Returns:
+            An UncertainWireGroup for red wires.
+        """
+        candidates = [Wire(WireColor.RED, n + 0.5) for n in numbers]
+        return cls(candidates=candidates, count_in_play=count)
+
+
+# =============================================================================
 # GameState
 # =============================================================================
 
@@ -1053,6 +1148,12 @@ class GameState:
         game_over: Whether the game has ended.
         game_won: Whether the game was won (all stands empty).
         wires_in_play: All wire objects that were shuffled into the game.
+            For uncertain (X of Y) colored wires, include only the
+            definite wires here; use ``uncertain_wire_groups`` for the
+            candidates whose inclusion is unknown.
+        uncertain_wire_groups: Groups of colored wires with uncertain
+            inclusion from X-of-Y mission setup. Used in calculator mode
+            to let the solver enumerate which candidates are in play.
         active_player_index: If set, display output is rendered from this
             player's perspective (their wires visible, others' hidden
             wires masked as '?'). If None, all wires are shown (god mode).
@@ -1066,6 +1167,9 @@ class GameState:
     game_over: bool = False
     game_won: bool = False
     wires_in_play: list[Wire] = dataclasses.field(default_factory=list)
+    uncertain_wire_groups: list[UncertainWireGroup] = dataclasses.field(
+        default_factory=list,
+    )
     active_player_index: int | None = None
 
     @property
@@ -1206,6 +1310,7 @@ class GameState:
         character_cards: list[CharacterCard | None] | None = None,
         history: TurnHistory | None = None,
         active_player_index: int = 0,
+        uncertain_wire_groups: list[UncertainWireGroup] | None = None,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -1223,11 +1328,19 @@ class GameState:
             markers: Board markers for red/yellow wires.
             equipment: Equipment cards in play.
             wires_in_play: All wires that were included in this mission.
+                For uncertain (X of Y) colored wires, include only the
+                definite wires here; use ``uncertain_wire_groups`` for
+                the candidates.
             character_cards: Character card for each player (or None).
             history: Optional turn history for deduction.
             active_player_index: Index of the player whose turn it is.
                 Display output is rendered from this player's perspective
                 (their wires visible, others masked as '?'). Defaults to 0.
+            uncertain_wire_groups: Groups of colored wires with uncertain
+                inclusion from X-of-Y mission setup. UNCERTAIN markers
+                are auto-generated from the candidates. The probability
+                engine uses discard slots to enumerate which candidates
+                are in play.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1254,16 +1367,30 @@ class GameState:
             mistakes_remaining = max_failures
         failures = max_failures - mistakes_remaining
 
+        # Auto-generate UNCERTAIN markers from uncertain wire groups
+        groups = uncertain_wire_groups or []
+        all_markers = list(markers or [])
+        existing_sort_values = {m.sort_value for m in all_markers}
+        for group in groups:
+            for wire in group.candidates:
+                if wire.sort_value not in existing_sort_values:
+                    all_markers.append(
+                        Marker(group.color, wire.sort_value,
+                               MarkerState.UNCERTAIN)
+                    )
+                    existing_sort_values.add(wire.sort_value)
+
         return cls(
             players=players,
             detonator=Detonator(
                 failures=failures,
                 max_failures=max_failures,
             ),
-            markers=markers or [],
+            markers=all_markers,
             equipment=equipment or [],
             history=history or TurnHistory(),
             wires_in_play=wires_in_play or [],
+            uncertain_wire_groups=groups,
             current_player_index=active_player_index,
             active_player_index=active_player_index,
         )

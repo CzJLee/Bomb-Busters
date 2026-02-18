@@ -30,8 +30,8 @@ The probability engine in @compute_probabilities.py computes the following from 
 
 ## Architecture
 
-- @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `WireConfig`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
-- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
+- @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `WireConfig`, `UncertainWireGroup`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
+- @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping and discard slots for uncertain (X of Y) wires, and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
 

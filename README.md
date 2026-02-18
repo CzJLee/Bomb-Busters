@@ -224,6 +224,8 @@ Bomb Busters FAQ.pdf         # Official FAQ
 
 **`WireConfig`** — Mission setup for colored wires. Specifies `count` wires in play, with optional `pool_size` for "X of Y" random selection.
 
+**`UncertainWireGroup`** — Represents colored wire candidates with uncertain inclusion from X-of-Y setup. Holds `candidates` (all drawn wires) and `count_in_play` (how many were kept). Factory methods: `yellow(numbers, count)`, `red(numbers, count)`. Used with `from_partial_state` for calculator mode.
+
 #### Action Records
 
 **`DualCutAction`** — Records actor, target, guessed value, result, and Double Detector details.
@@ -314,6 +316,7 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 | `character_cards` | `list[CharacterCard \| None] \| None` | Character card for each player (or `None` per player). |
 | `history` | `TurnHistory \| None` | Optional turn history for deduction (e.g., failed dual cuts reveal the actor holds that value). |
 | `active_player_index` | `int` | Index of the player whose turn it is. Display output is rendered from this player's perspective. Defaults to `0`. |
+| `uncertain_wire_groups` | `list[UncertainWireGroup] \| None` | Groups of colored wires with uncertain inclusion from X-of-Y mission setup. UNCERTAIN markers are auto-generated from the candidates. See [Uncertain (X of Y) Wires](#uncertain-x-of-y-wires) for details. |
 
 **Returns:** A `GameState` initialized from the provided partial information.
 
@@ -407,6 +410,61 @@ game = bomb_busters.GameState.from_partial_state(
 # Custom separator
 stand = bomb_busters.TileStand.from_string("1,2,?3,4", sep=",")
 ```
+
+#### Uncertain (X of Y) Wires
+
+When a mission uses X-of-Y colored wire setup (e.g., "draw 3 yellow wires, keep 2"), players see UNCERTAIN markers for all drawn candidates but don't know which subset was actually kept. Use `UncertainWireGroup` with `from_partial_state` to represent this uncertainty. The probability engine's constraint solver handles the combinatorics automatically using discard slots (slack variables) — no need to enumerate subsets manually.
+
+**`UncertainWireGroup`** — Describes a group of colored wires with uncertain inclusion. Factory methods `yellow(numbers, count)` and `red(numbers, count)` provide ergonomic construction.
+
+**How it works:** All candidate wires are added to the solver's pool. Virtual "discard slots" absorb the wires that are NOT in the game. The solver naturally enumerates which candidates are discarded vs. distributed to real player positions, producing correct joint probabilities in a single solve.
+
+**Example:**
+
+```python
+import bomb_busters
+import compute_probabilities
+
+# Mission setup: drew 3 yellow wires (Y2, Y3, Y9), keeping 2.
+# We see 3 UNCERTAIN markers but don't know which 2 are in the game.
+
+alice   = bomb_busters.TileStand.from_string("?2 ?5 ?7 ?9 ?11")
+bob     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+diana   = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+eve     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+
+game = bomb_busters.GameState.from_partial_state(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    stands=[alice, bob, charlie, diana, eve],
+    # Blue wires are definite — list them in wires_in_play as usual
+    wires_in_play=bomb_busters.create_all_blue_wires(),
+    # Yellow candidates go in uncertain_wire_groups (NOT wires_in_play)
+    uncertain_wire_groups=[
+        bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+    ],
+)
+
+# UNCERTAIN markers are auto-generated — no need to create them manually.
+# The probability engine accounts for the uncertainty automatically.
+compute_probabilities.print_probability_analysis(game, active_player_index=0)
+
+# You can also combine yellow and red uncertain groups:
+game = bomb_busters.GameState.from_partial_state(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    stands=[alice, bob, charlie, diana, eve],
+    wires_in_play=bomb_busters.create_all_blue_wires(),
+    uncertain_wire_groups=[
+        bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+        bomb_busters.UncertainWireGroup.red([3, 7], count=1),
+    ],
+)
+```
+
+**Notes:**
+- Pass only definite wires (e.g., all blue wires) in `wires_in_play`. Uncertain colored wires go exclusively in `uncertain_wire_groups`.
+- If the observer already has a candidate wire on their stand (e.g., Y3 is visible to them), the solver automatically accounts for it — no special handling needed.
+- UNCERTAIN markers are auto-generated from the groups and merged with any manually provided markers (no duplicates).
 
 ### Probability Engine (`compute_probabilities.py`)
 

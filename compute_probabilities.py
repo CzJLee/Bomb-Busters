@@ -26,6 +26,11 @@ except ImportError:  # pragma: no cover
 
 _C = bomb_busters._Colors
 
+# Sentinel player index for discard slots (slack variables) used by the
+# constraint solver when uncertain (X of Y) wire groups are present.
+# Discard positions absorb candidate wires that are NOT in the game.
+_DISCARD_PLAYER_INDEX = -1
+
 
 # =============================================================================
 # Known Information
@@ -418,6 +423,46 @@ def _setup_solver(
     unknown_pool = compute_unknown_pool(known, game)
     constraints = compute_position_constraints(game, active_player_index)
 
+    # Handle uncertain wire groups: add unresolved candidates to the
+    # unknown pool and create discard positions (slack variables) for
+    # candidate wires that are NOT in the game.
+    discard_slot_idx = 0
+    for group in game.uncertain_wire_groups:
+        # Determine which candidates are already accounted for
+        # (on observer's stand, cut elsewhere, or in wires_in_play).
+        accounted_count = 0
+        unresolved: list[bomb_busters.Wire] = []
+        for wire in group.candidates:
+            is_in_pool = wire in unknown_pool
+            is_accounted = (
+                wire in known.observer_wires
+                or wire in known.cut_wires
+            )
+            if is_in_pool or is_accounted:
+                accounted_count += 1
+            else:
+                unresolved.append(wire)
+
+        # How many unresolved candidates are actually in the game
+        remaining_in_play = max(
+            0, group.count_in_play - accounted_count,
+        )
+        discard_count = len(unresolved) - remaining_in_play
+
+        # Add unresolved candidates to the unknown pool
+        unknown_pool.extend(unresolved)
+
+        # Create discard positions for wires not in the game
+        for _ in range(discard_count):
+            constraints.append(PositionConstraint(
+                player_index=_DISCARD_PLAYER_INDEX,
+                slot_index=discard_slot_idx,
+                lower_bound=0.0,
+                upper_bound=13.0,
+                required_color=group.color,
+            ))
+            discard_slot_idx += 1
+
     if not constraints:
         return None
 
@@ -743,7 +788,12 @@ def _forward_pass_positions(
 
         frontier = next_frontier
 
-    return result
+    # Filter out discard player entries (slack variables from uncertain
+    # wire groups) — callers only care about real player positions.
+    return {
+        key: counter for key, counter in result.items()
+        if key[0] != _DISCARD_PLAYER_INDEX
+    }
 
 
 def _find_target_positions(

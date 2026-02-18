@@ -2081,5 +2081,475 @@ class TestYellowInfoRevealed(unittest.TestCase):
         self.assertEqual(counter.get(y3, 0), total)
 
 
+class TestUncertainWireGroups(unittest.TestCase):
+    """Tests for probability calculations with uncertain (X of Y) wire groups."""
+
+    def test_basic_uncertain_yellow(self) -> None:
+        """3 yellow candidates, keep 2 — solver distributes correctly.
+
+        4 players, small stands. Observer has no yellow wires.
+        Yellow candidates: Y2, Y3, Y9. Keep 2 of 3.
+
+        P0 (observer): [blue-1, blue-6]       (2 wires)
+        P1: [CUT-2, HIDDEN, HIDDEN]           (2 hidden)
+        P2: [HIDDEN, HIDDEN]                  (2 hidden)
+        P3: [HIDDEN]                          (1 hidden)
+
+        Blue wires in play: 1, 2, 3, 5, 6, 10 (6 wires).
+        Unknown blue pool: 6 - 2(observer) - 1(P1 cut) = 3 blues.
+        Uncertain: 3 candidates, 2 in play → 1 discard.
+        Total pool: 3 blue + 3 yellow = 6.
+        Total positions: 5 hidden + 1 discard = 6. ✓
+        """
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in [1, 2, 3, 5, 6, 10]]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                    state=bomb_busters.SlotState.CUT),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # Verify no discard player entries in results
+        for key in probs:
+            self.assertNotEqual(key[0], -1)
+
+        # Yellow wires should appear in the distributions
+        total_yellow_prob = 0.0
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            yellow_count = sum(
+                c for w, c in counter.items()
+                if w.color == bomb_busters.WireColor.YELLOW
+            )
+            total_yellow_prob += yellow_count / total
+
+        # Exactly 2 yellow wires are distributed across 5 hidden positions
+        # (some positions can't hold yellow due to sort constraints),
+        # so total yellow probability should sum to 2.0.
+        self.assertAlmostEqual(total_yellow_prob, 2.0, places=5)
+
+    def test_candidate_on_observer_stand(self) -> None:
+        """Uncertain candidate on observer's stand reduces discard count.
+
+        Observer has Y3. Uncertain group: [Y2, Y3, Y9], keep 2.
+        Y3 is accounted for → only 1 more of [Y2, Y9] needed, 1 discarded.
+
+        P0 (observer): [blue-1, Y3, blue-6]   (3 wires, Y3 known)
+        P1: [HIDDEN, HIDDEN]                  (2 hidden)
+        P2: [HIDDEN, HIDDEN]                  (2 hidden)
+        P3: [HIDDEN]                          (1 hidden)
+
+        Blue: 1, 2, 5, 6, 10 (5 wires). Unknown blue pool: 5 - 2 = 3.
+        Uncertain: Y3 accounted, [Y2, Y9] unresolved, keep 1, discard 1.
+        Total pool: 3 blue + 2 yellow = 5.
+        Total positions: 5 hidden + 1 discard = 6... wait, that's 5 vs 6.
+        Hmm, need to balance: 3 blues for 5 hidden + 1 yellow kept = 4 real
+        + 1 discard = 5. Let me recalculate.
+
+        Actually: observer has 3 wires (blue-1, Y3, blue-6).
+        Hidden positions on others: P1(2) + P2(2) + P3(1) = 5.
+        Blue pool: 5 blue total - 2 observer blue - 0 cut = 3 blues.
+        Uncertain: Y3 accounted. Unresolved: Y2, Y9. Keep 1, discard 1.
+        Pool: 3 + 2 = 5. Positions: 5 + 1 = 6. That's 5 ≠ 6!
+
+        We need more blue wires. Let's add them so pool = positions.
+        Total = 5 hidden + 1 discard = 6 positions needed.
+        Pool = (blue_total - 3 observer) + 2 unresolved = blue_total - 1.
+        Need blue_total - 1 = 6 → blue_total = 7.
+        """
+        blue_values = [1, 2, 4, 5, 6, 8]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in blue_values]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # Y3 is on observer's stand (accounted for). Only 1 more yellow
+        # wire is in the game. Total yellow probability across all hidden
+        # slots should sum to 1.0.
+        total_yellow_prob = 0.0
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            yellow_count = sum(
+                c for w, c in counter.items()
+                if w.color == bomb_busters.WireColor.YELLOW
+            )
+            total_yellow_prob += yellow_count / total
+        self.assertAlmostEqual(total_yellow_prob, 1.0, places=5)
+
+    def test_candidate_already_cut(self) -> None:
+        """Uncertain candidate that's been cut is accounted for.
+
+        Y3 was cut on P1's stand. Uncertain: [Y2, Y3, Y9], keep 2.
+        Y3 accounted → 1 more of [Y2, Y9] is in play, 1 discarded.
+
+        P0 (observer): [blue-1, blue-6]    (2 wires)
+        P1: [CUT-Y3, HIDDEN, HIDDEN]       (2 hidden)
+        P2: [HIDDEN, HIDDEN]               (2 hidden)
+        P3: [HIDDEN]                        (1 hidden)
+
+        Blue: 1, 2, 5, 6, 10 (5 wires). Unknown blue pool: 5 - 2 = 3.
+        Cut wires: Y3 (accounted). Unresolved: Y2, Y9. Keep 1, discard 1.
+        Pool: 3 + 2 = 5. Positions: 5 + 1 = 6. Need 1 more blue.
+        """
+        blue_values = [1, 2, 5, 6, 10, 11]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in blue_values]
+
+        y3_wire = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=y3_wire, state=bomb_busters.SlotState.CUT),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # Y3 cut (accounted). Only 1 more yellow in the game.
+        total_yellow_prob = 0.0
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            yellow_count = sum(
+                c for w, c in counter.items()
+                if w.color == bomb_busters.WireColor.YELLOW
+            )
+            total_yellow_prob += yellow_count / total
+        self.assertAlmostEqual(total_yellow_prob, 1.0, places=5)
+
+    def test_multiple_uncertain_groups(self) -> None:
+        """Yellow and red uncertain groups together.
+
+        Uncertain yellow: [Y2, Y4, Y6], keep 2 (discard 1).
+        Uncertain red: [R3, R7], keep 1 (discard 1).
+
+        P0 (observer): [blue-1, blue-8]     (2 wires)
+        P1: [HIDDEN, HIDDEN, HIDDEN]        (3 hidden)
+        P2: [HIDDEN, HIDDEN, HIDDEN]        (3 hidden)
+        P3: [HIDDEN, HIDDEN]                (2 hidden)
+
+        Blue: 1, 2, 5, 8, 9, 12 (6 wires). Unknown blue pool: 6 - 2 = 4.
+        Yellow: 3 unresolved, discard 1. Red: 2 unresolved, discard 1.
+        Pool: 4 + 3 + 2 = 9. Positions: 8 + 2 discard = 10. Need 1 more blue.
+        Actually: 4 + 3 + 2 = 9, 8 + 2 = 10. Need pool = 10 → add 1 blue.
+        """
+        blue_values = [1, 2, 5, 7, 8, 9, 12]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in blue_values]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 4, 6], count=2),
+                bomb_busters.UncertainWireGroup.red([3, 7], count=1),
+            ],
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # No discard entries in results
+        for key in probs:
+            self.assertNotEqual(key[0], -1)
+
+        # 2 yellow wires in game
+        total_yellow = 0.0
+        total_red = 0.0
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            for w, c in counter.items():
+                if w.color == bomb_busters.WireColor.YELLOW:
+                    total_yellow += c / total
+                elif w.color == bomb_busters.WireColor.RED:
+                    total_red += c / total
+        self.assertAlmostEqual(total_yellow, 2.0, places=5)
+        self.assertAlmostEqual(total_red, 1.0, places=5)
+
+    def test_all_candidates_accounted_for(self) -> None:
+        """All uncertain candidates are accounted for — no discard needed.
+
+        Observer has Y3 and Y5. Uncertain: [Y3, Y5], keep 2.
+        Both accounted → 0 unresolved, 0 discards.
+
+        P0 (observer): [blue-1, Y3, Y5, blue-8]  (4 wires)
+        P1: [HIDDEN, HIDDEN]                      (2 hidden)
+        P2: [HIDDEN]                               (1 hidden)
+        P3: [HIDDEN]                               (1 hidden)
+
+        Blue: 1, 2, 5, 8 (4 wires). Unknown blue pool: 4 - 2 = 2.
+        All uncertain accounted → pool = 2, positions = 4. Need 2 more blue.
+        """
+        blue_values = [1, 2, 5, 6, 8, 9]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in blue_values]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 5.1)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([3, 5], count=2),
+            ],
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # All candidates accounted for — no yellow in the pool.
+        # All hidden slots should only have blue wires.
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            if total == 0:
+                continue
+            yellow_count = sum(
+                c for w, c in counter.items()
+                if w.color == bomb_busters.WireColor.YELLOW
+            )
+            self.assertEqual(yellow_count, 0)
+
+    def test_no_uncertain_groups_unchanged(self) -> None:
+        """Without uncertain groups, behavior is identical to before.
+
+        Simple blue-only 4-player game, no uncertain groups.
+        """
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in [1, 2, 3, 5, 6, 10]]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+        )
+
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+
+        # 4 hidden positions, all with blue wires only
+        self.assertEqual(len(probs), 4)
+        for (p_idx, s_idx), counter in probs.items():
+            total = sum(counter.values())
+            self.assertGreater(total, 0)
+            for wire in counter:
+                self.assertEqual(wire.color, bomb_busters.WireColor.BLUE)
+
+    def test_dual_cut_with_uncertain_yellow(self) -> None:
+        """Dual cut probability accounts for uncertain yellow wires.
+
+        Without uncertain wires, P1[1] would deterministically hold blue-3
+        (the only blue fitting [2.0, 5.0] bounds). With uncertain yellow
+        wires Y2 and Y3, those also fit the bounds and reduce the
+        probability of blue-3.
+
+        P0 (observer): [blue-1, blue-6]     (2 wires)
+        P1: [CUT-2, HIDDEN, CUT-5]          (1 hidden, bounds [2, 5])
+        P2: [HIDDEN]                         (1 hidden)
+        P3: [HIDDEN]                         (1 hidden)
+
+        Blue: 1, 2, 3, 5, 6 (5 wires). Unknown blue pool: 5 - 2 - 2 = 1.
+        Uncertain: 3 yellow, keep 2, discard 1.
+        Pool: 1 blue + 3 yellow = 4. Positions: 3 hidden + 1 discard = 4. ok
+        """
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in [1, 2, 3, 5, 6]]
+
+        stands = [
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0)),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 6.0)),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 2.0),
+                    state=bomb_busters.SlotState.CUT),
+                bomb_busters.Slot(wire=None),
+                bomb_busters.Slot(
+                    wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+                    state=bomb_busters.SlotState.CUT),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+            bomb_busters.TileStand(slots=[
+                bomb_busters.Slot(wire=None),
+            ]),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Me", "P1", "P2", "P3"],
+            stands=stands,
+            wires_in_play=blue_wires,
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+
+        # P1[1] has bounds [2.0, 5.0]. Blue-3 (sv=3.0), Y2 (sv=2.1),
+        # and Y3 (sv=3.1) all fit. So P(blue-3 at P1[1]) < 100%.
+        prob_blue3 = compute_probabilities.probability_of_dual_cut(
+            game, 0, 1, 1, 3,
+        )
+        self.assertGreater(prob_blue3, 0.0)
+        self.assertLess(prob_blue3, 1.0)
+
+        # Verify the yellow wires are present in P1[1]'s distribution
+        probs = compute_probabilities.compute_position_probabilities(game, 0)
+        counter = probs[(1, 1)]
+        total = sum(counter.values())
+        yellow_count = sum(
+            c for w, c in counter.items()
+            if w.color == bomb_busters.WireColor.YELLOW
+        )
+        self.assertGreater(yellow_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

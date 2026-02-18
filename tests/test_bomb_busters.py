@@ -1556,5 +1556,131 @@ class TestGameStateHelpers(unittest.TestCase):
         self.assertEqual(game.current_player_index, 2)
 
 
+class TestUncertainWireGroup(unittest.TestCase):
+    """Tests for the bomb_busters.UncertainWireGroup class."""
+
+    def test_yellow_factory(self) -> None:
+        group = bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2)
+        self.assertEqual(len(group.candidates), 3)
+        self.assertEqual(group.count_in_play, 2)
+        self.assertEqual(group.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(group.discard_count, 1)
+        self.assertEqual(
+            group.candidates[0],
+            bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1),
+        )
+
+    def test_red_factory(self) -> None:
+        group = bomb_busters.UncertainWireGroup.red([3, 7], count=1)
+        self.assertEqual(len(group.candidates), 2)
+        self.assertEqual(group.count_in_play, 1)
+        self.assertEqual(group.color, bomb_busters.WireColor.RED)
+        self.assertEqual(group.discard_count, 1)
+        self.assertEqual(
+            group.candidates[1],
+            bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5),
+        )
+
+    def test_blue_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup(
+                candidates=[bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0)],
+                count_in_play=1,
+            )
+
+    def test_empty_candidates_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup(candidates=[], count_in_play=0)
+
+    def test_mixed_colors_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup(
+                candidates=[
+                    bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1),
+                    bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5),
+                ],
+                count_in_play=1,
+            )
+
+    def test_count_exceeds_candidates_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup.yellow([2, 3], count=3)
+
+    def test_yellow_count_exceeds_game_limit_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup.yellow([1, 2, 3, 4, 5], count=5)
+
+    def test_red_count_exceeds_game_limit_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters.UncertainWireGroup.red([1, 2, 3, 4], count=4)
+
+    def test_zero_count_in_play(self) -> None:
+        group = bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=0)
+        self.assertEqual(group.count_in_play, 0)
+        self.assertEqual(group.discard_count, 3)
+
+    def test_from_partial_state_auto_generates_markers(self) -> None:
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            wires_in_play=[
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                for i in [1, 2, 3, 4, 5, 6]
+            ],
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        self.assertEqual(len(yellow_markers), 3)
+        self.assertTrue(
+            all(
+                m.state == bomb_busters.MarkerState.UNCERTAIN
+                for m in yellow_markers
+            )
+        )
+        marker_bases = sorted(m.base_number for m in yellow_markers)
+        self.assertEqual(marker_bases, [2, 3, 9])
+
+    def test_auto_markers_dont_duplicate_manual(self) -> None:
+        manual_marker = bomb_busters.Marker(
+            bomb_busters.WireColor.YELLOW, 2.1,
+            bomb_busters.MarkerState.UNCERTAIN,
+        )
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            markers=[manual_marker],
+            wires_in_play=[
+                bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                for i in [1, 2, 3, 4, 5, 6]
+            ],
+            uncertain_wire_groups=[
+                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
+            ],
+        )
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        # 3 unique markers (2.1 not duplicated)
+        self.assertEqual(len(yellow_markers), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
