@@ -31,3 +31,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Personal calculator scripts
+examples/calculate_my_gamestate.py
