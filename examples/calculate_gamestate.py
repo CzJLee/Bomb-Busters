@@ -2,7 +2,8 @@
 
 Demonstrates using ``GameState.from_partial_state()`` to enter a
 mid-game scenario and run probability analysis from the active
-player's perspective. Includes dual cut, solo cut, Double Detector,
+player's perspective. Includes dual cut, solo cut, equipment-based
+moves (Double/Triple/Super Detector, X or Y Ray, Fast Pass),
 and red wire risk calculations.
 """
 
@@ -15,7 +16,14 @@ import bomb_busters
 import compute_probabilities
 
 # Equipment types to include in probability analysis.
-INCLUDE_EQUIPMENT = {compute_probabilities.EquipmentType.DOUBLE_DETECTOR}
+# Comment out any equipment you don't want to see in the output.
+INCLUDE_EQUIPMENT = {
+    compute_probabilities.EquipmentType.DOUBLE_DETECTOR,
+    compute_probabilities.EquipmentType.TRIPLE_DETECTOR,
+    compute_probabilities.EquipmentType.SUPER_DETECTOR,
+    compute_probabilities.EquipmentType.X_OR_Y_RAY,
+    compute_probabilities.EquipmentType.FAST_PASS,
+}
 
 
 # ── Main ────────────────────────────────────────────────────
