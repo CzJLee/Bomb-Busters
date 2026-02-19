@@ -921,7 +921,7 @@ class TestGameStateCreation(unittest.TestCase):
     def test_create_with_red_wires(self) -> None:
         game = bomb_busters.GameState.create_game(
             player_names=["A", "B", "C", "D"],
-            wire_configs=[bomb_busters.WireConfig(bomb_busters.WireColor.RED, count=3)],
+            red_wires=3,
             seed=42,
         )
         total = sum(p.tile_stand.remaining_count for p in game.players)
@@ -934,7 +934,7 @@ class TestGameStateCreation(unittest.TestCase):
     def test_create_with_yellow_x_of_y(self) -> None:
         game = bomb_busters.GameState.create_game(
             player_names=["A", "B", "C", "D"],
-            wire_configs=[bomb_busters.WireConfig(bomb_busters.WireColor.YELLOW, count=2, pool_size=3)],
+            yellow_wires=(2, 3),
             seed=42,
         )
         total = sum(p.tile_stand.remaining_count for p in game.players)
@@ -986,7 +986,7 @@ class TestGameStateCreation(unittest.TestCase):
         """With 50 wires and 4 players: 2 get 13, 2 get 12."""
         game = bomb_busters.GameState.create_game(
             player_names=["A", "B", "C", "D"],
-            wire_configs=[bomb_busters.WireConfig(bomb_busters.WireColor.YELLOW, count=2)],
+            yellow_wires=2,
             seed=42,
         )
         counts = [p.tile_stand.remaining_count for p in game.players]
@@ -1997,11 +1997,7 @@ class TestCaptainIndex(unittest.TestCase):
         # With captain=2: players 2,3 get 13; players 0,1 get 12
         game = bomb_busters.GameState.create_game(
             player_names=["A", "B", "C", "D"],
-            wire_configs=[
-                bomb_busters.WireConfig(
-                    bomb_busters.WireColor.YELLOW, count=2,
-                ),
-            ],
+            yellow_wires=2,
             seed=42,
             captain=2,
         )
@@ -2019,11 +2015,7 @@ class TestCaptainIndex(unittest.TestCase):
         # 50 wires, 4 players, captain=3: players 3,0 get 13; 1,2 get 12
         game = bomb_busters.GameState.create_game(
             player_names=["A", "B", "C", "D"],
-            wire_configs=[
-                bomb_busters.WireConfig(
-                    bomb_busters.WireColor.YELLOW, count=2,
-                ),
-            ],
+            yellow_wires=2,
             seed=42,
             captain=3,
         )

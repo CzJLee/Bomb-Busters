@@ -39,17 +39,8 @@ def main() -> None:
     # ── Create game ────────────────────────────────────────────
     game = bomb_busters.GameState.create_game(
         player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        wire_configs=[
-            bomb_busters.WireConfig(
-                color=bomb_busters.WireColor.YELLOW,
-                count=2,
-                pool_size=3,
-            ),
-            bomb_busters.WireConfig(
-                color=bomb_busters.WireColor.RED,
-                count=1,
-            ),
-        ],
+        yellow_wires=(2, 3),
+        red_wires=1,
         seed=42,
     )
 

@@ -1352,30 +1352,38 @@ class GameState:
     def create_game(
         cls,
         player_names: list[str],
-        wire_configs: list[WireConfig] | None = None,
         seed: int | None = None,
         captain: int = 0,
+        yellow_wires: int | tuple[int, int] | None = None,
+        red_wires: int | tuple[int, int] | None = None,
     ) -> GameState:
         """Create a new game in full simulation mode.
 
         Shuffles all wires, deals them evenly to players, and sets up
-        the board.
+        the board. Always includes all 48 blue wires (1-12, 4 copies
+        each). Optionally adds yellow and/or red wires.
 
         Args:
             player_names: Names of the players (4-5 players).
-            wire_configs: Optional list of WireConfig for red/yellow wires.
-                If None, only blue wires are used.
             seed: Optional random seed for reproducibility.
             captain: Player index of the captain. The captain is dealt
                 first, indicates first, and takes the first turn.
                 Defaults to 0.
+            yellow_wires: Yellow wire specification. ``None`` (default)
+                = no yellow wires. ``2`` = include 2 randomly selected
+                yellow wires (KNOWN markers). ``(2, 3)`` = draw 3
+                random yellow wires, keep 2 (UNCERTAIN markers on all
+                3 drawn).
+            red_wires: Red wire specification. Same semantics as
+                ``yellow_wires``. ``1`` = include 1 random red wire.
+                ``(1, 2)`` = draw 2 random red wires, keep 1.
 
         Returns:
             A fully initialized GameState.
 
         Raises:
-            ValueError: If player count is not 4-5 or captain index
-                is out of range.
+            ValueError: If player count is not 4-5, captain index
+                is out of range, or wire counts are invalid.
         """
         if seed is not None:
             random.seed(seed)
@@ -1393,34 +1401,49 @@ class GameState:
         pool: list[Wire] = create_all_blue_wires()
         markers: list[Marker] = []
 
-        if wire_configs:
-            for config in wire_configs:
-                all_colored = (
-                    create_all_red_wires()
-                    if config.color == WireColor.RED
-                    else create_all_yellow_wires()
-                )
+        for color, spec in [
+            (WireColor.YELLOW, yellow_wires),
+            (WireColor.RED, red_wires),
+        ]:
+            if spec is None:
+                continue
 
-                if config.pool_size is not None:
-                    # "X of Y" mode: draw pool_size, keep count, set aside rest
-                    drawn = random.sample(all_colored, config.pool_size)
-                    # All drawn wires get UNCERTAIN markers
-                    for w in drawn:
-                        markers.append(
-                            Marker(config.color, w.sort_value, MarkerState.UNCERTAIN)
-                        )
-                    # Shuffle drawn wires, keep count, discard rest
-                    random.shuffle(drawn)
-                    kept = drawn[:config.count]
-                    pool.extend(kept)
-                else:
-                    # Direct inclusion: draw exactly count wires
-                    drawn = random.sample(all_colored, config.count)
-                    for w in drawn:
-                        markers.append(
-                            Marker(config.color, w.sort_value, MarkerState.KNOWN)
-                        )
-                    pool.extend(drawn)
+            all_colored = (
+                create_all_red_wires()
+                if color == WireColor.RED
+                else create_all_yellow_wires()
+            )
+
+            if isinstance(spec, tuple):
+                count, pool_size = spec
+                # Validate
+                if pool_size < count:
+                    raise ValueError(
+                        f"Pool size ({pool_size}) must be >= count "
+                        f"({count}) for {color.name.lower()} wires"
+                    )
+                if pool_size > 11:
+                    raise ValueError(
+                        f"Pool size ({pool_size}) exceeds available "
+                        f"{color.name.lower()} wires (11)"
+                    )
+                # "X of Y" mode: draw pool_size, keep count
+                drawn = random.sample(all_colored, pool_size)
+                for w in drawn:
+                    markers.append(
+                        Marker(color, w.sort_value, MarkerState.UNCERTAIN),
+                    )
+                random.shuffle(drawn)
+                pool.extend(drawn[:count])
+            else:
+                count = spec
+                # Direct inclusion: draw exactly count wires
+                drawn = random.sample(all_colored, count)
+                for w in drawn:
+                    markers.append(
+                        Marker(color, w.sort_value, MarkerState.KNOWN),
+                    )
+                pool.extend(drawn)
 
         # Record all wires in play before shuffling
         wires_in_play = list(pool)
