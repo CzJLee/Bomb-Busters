@@ -1,8 +1,8 @@
 # Claude instructions for Bomb Busters repo
 
-See @README.md for information about Bomb Busters and the rules of the game.
+See @docs/RULES.md for the game rules and gameplay tips. See @docs/DOCUMENTATION.md for code architecture, API reference, and usage examples.
 
-See @docs/Bomb Busters Rulebook.pdf for the official published PDF rulebook of the game. Refer to this for any unclear or ambiguous rules that the README does not cover. The @docs/Bomb Busters FAQ.pdf file contains some additional clarifications.
+See @docs/Bomb Busters Rulebook.pdf for the official published PDF rulebook of the game. Refer to this for any unclear or ambiguous rules that the docs do not cover. The @docs/Bomb Busters FAQ.pdf file contains some additional clarifications.
 
 ## Conventions
 
@@ -35,13 +35,13 @@ The probability engine in @compute_probabilities.py computes the following from 
 ### Repository layout
 
 - Python source files stay flat at the repo root for trivial imports and Pyodide compatibility. Do not nest them into a package unless the file count clearly warrants it.
-- `docs/` — Documentation (PDFs, algorithm docs, roadmap). Reference with `@docs/` prefix. Key algorithm docs: @docs/EXACT_SOLVER.md (exact constraint solver), @docs/MONTE_CARLO_SOLVER.md (MC fallback solver), @docs/INDICATION_QUALITY.md (indication quality metric).
+- `docs/` — Documentation (PDFs, algorithm docs, roadmap). Reference with `@docs/` prefix. Key docs: @docs/RULES.md (game rules), @docs/DOCUMENTATION.md (code architecture and API), @docs/EXACT_SOLVER.md (exact constraint solver), @docs/MONTE_CARLO_SOLVER.md (MC fallback solver), @docs/INDICATION_QUALITY.md (indication quality metric).
 - `tests/` — Unit tests (unittest).
 - `web/` — Future browser-based UI (see @docs/WEB_UI_ROADMAP.md).
 
 ### Key modules
 
-- @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `WireConfig`, `UncertainWireGroup`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
+- @bomb_busters.py — Game model: enums (`WireColor`, `SlotState`, `ActionType`, `ActionResult`, `MarkerState`), dataclasses (`Wire`, `Slot`, `TileStand`, `Player`, `CharacterCard`, `Detonator`, `Marker`, `Equipment`, `UncertainWireGroup`), action records (`DualCutAction`, `SoloCutAction`, `RevealRedAction`, `TurnHistory`), and `GameState` with two factory methods (`create_game` for simulation, `from_partial_state` for calculator mode).
 - @compute_probabilities.py — Probability engine: `KnownInfo` extraction, unknown pool computation, `PositionConstraint` sort-value bounds, backtracking constraint solver with identical-wire grouping and discard slots for uncertain (X of Y) wires, Monte Carlo fallback (`monte_carlo_probabilities`, `monte_carlo_analysis`, `MCSamples`, `mc_dd_probability`, `mc_red_dd_probability`, `count_hidden_positions`, `MC_POSITION_THRESHOLD`), indication quality analysis (`rank_indications`, `print_indication_analysis`), and high-level API (`probability_of_dual_cut`, `probability_of_double_detector`, `probability_of_red_wire`, `probability_of_red_wire_dd`, `guaranteed_actions`, `rank_all_moves`).
 
 ## Environment setup
