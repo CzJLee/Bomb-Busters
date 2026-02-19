@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import enum
 import math
 import random
 
@@ -32,6 +33,23 @@ _C = bomb_busters._Colors
 # constraint solver when uncertain (X of Y) wire groups are present.
 # Discard positions absorb candidate wires that are NOT in the game.
 _DISCARD_PLAYER_INDEX = -1
+
+
+# =============================================================================
+# Equipment Type Enum
+# =============================================================================
+
+class EquipmentType(enum.Enum):
+    """Equipment types that affect probability calculations.
+
+    Used with ``rank_all_moves(include_equipment=...)`` to control
+    which equipment-based moves are enumerated in the ranking.
+    """
+    DOUBLE_DETECTOR = "double_detector"
+    TRIPLE_DETECTOR = "triple_detector"
+    SUPER_DETECTOR = "super_detector"
+    X_OR_Y_RAY = "x_or_y_ray"
+    FAST_PASS = "fast_pass"
 
 
 # =============================================================================
@@ -421,12 +439,29 @@ class SolverContext:
         initial_pool: Tuple of counts for each distinct wire type.
         must_have: Dict mapping player_index to set of gameplay values
             they must have (from failed dual cut deductions).
+        must_not_have: Dict mapping player_index to set of gameplay
+            values they must NOT have (from MustNotHaveValue constraints,
+            e.g., General Radar "no").
+        adjacent_constraints: Dict mapping player_index to list of
+            AdjacentNotEqual/AdjacentEqual constraints for that player.
+        slot_to_pos: Dict mapping player_index to a dict of
+            slot_index -> position_index within that player's positions
+            list. Only includes hidden slots tracked by the solver.
     """
     positions_by_player: dict[int, list[PositionConstraint]]
     player_order: list[int]
     distinct_wires: list[bomb_busters.Wire]
     initial_pool: tuple[int, ...]
     must_have: dict[int, set[int | str]]
+    must_not_have: dict[int, set[int | str]] = dataclasses.field(
+        default_factory=dict,
+    )
+    adjacent_constraints: dict[
+        int, list[bomb_busters.AdjacentNotEqual | bomb_busters.AdjacentEqual]
+    ] = dataclasses.field(default_factory=dict)
+    slot_to_pos: dict[int, dict[int, int]] = dataclasses.field(
+        default_factory=dict,
+    )
 
 
 def _setup_solver(
@@ -516,12 +551,69 @@ def _setup_solver(
     distinct_wires = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     initial_pool = tuple(pool_counter[w] for w in distinct_wires)
 
+    # ── Merge slot constraints from game state ────────────────
+    must_have = dict(known.player_must_have)  # copy to avoid mutation
+    must_not_have: dict[int, set[int | str]] = {}
+    adjacent_constraints: dict[
+        int, list[bomb_busters.AdjacentNotEqual | bomb_busters.AdjacentEqual]
+    ] = {}
+
+    for c in game.slot_constraints:
+        if isinstance(c, bomb_busters.MustHaveValue):
+            must_have.setdefault(c.player_index, set()).add(c.value)
+        elif isinstance(c, bomb_busters.MustNotHaveValue):
+            must_not_have.setdefault(c.player_index, set()).add(c.value)
+        elif isinstance(
+            c, (bomb_busters.AdjacentNotEqual, bomb_busters.AdjacentEqual),
+        ):
+            adjacent_constraints.setdefault(c.player_index, []).append(c)
+
+    # Build slot_to_pos mapping for each player (slot_index -> position
+    # index within that player's positions list).
+    slot_to_pos: dict[int, dict[int, int]] = {}
+    for p_idx, positions in positions_by_player.items():
+        mapping: dict[int, int] = {}
+        for pi, pc in enumerate(positions):
+            mapping[pc.slot_index] = pi
+        slot_to_pos[p_idx] = mapping
+
+    # Handle adjacent constraints where one slot is known (CUT or
+    # INFO_REVEALED): tighten bounds on the hidden slot instead of
+    # tracking as a runtime constraint.
+    resolved_adjacent: dict[
+        int, list[bomb_busters.AdjacentNotEqual | bomb_busters.AdjacentEqual]
+    ] = {}
+    for p_idx, adj_list in adjacent_constraints.items():
+        for adj in adj_list:
+            player = game.players[adj.player_index]
+            left_slot = player.tile_stand.slots[adj.slot_index_left]
+            right_slot = player.tile_stand.slots[adj.slot_index_right]
+            left_known = left_slot.state != bomb_busters.SlotState.HIDDEN
+            right_known = right_slot.state != bomb_busters.SlotState.HIDDEN
+
+            if left_known and right_known:
+                # Both known — constraint is trivially satisfied/violated,
+                # nothing to enforce at solve time.
+                continue
+            elif left_known or right_known:
+                # One slot is known — we could tighten bounds on the
+                # hidden slot, but the general runtime check handles this
+                # correctly too. For simplicity, keep as a runtime
+                # constraint since the overhead is minimal (0-2 per game).
+                resolved_adjacent.setdefault(p_idx, []).append(adj)
+            else:
+                # Both hidden — must check at runtime after composition.
+                resolved_adjacent.setdefault(p_idx, []).append(adj)
+
     return SolverContext(
         positions_by_player=positions_by_player,
         player_order=player_order,
         distinct_wires=distinct_wires,
         initial_pool=initial_pool,
-        must_have=known.player_must_have,
+        must_have=must_have,
+        must_not_have=must_not_have,
+        adjacent_constraints=resolved_adjacent,
+        slot_to_pos=slot_to_pos,
     )
 
 
@@ -583,9 +675,40 @@ def _count_root_compositions(ctx: SolverContext) -> int:
     return count
 
 
+def _known_slot_gameplay_value(
+    game: bomb_busters.GameState,
+    player_index: int,
+    slot_index: int,
+) -> int | str | None:
+    """Get the gameplay value of a known (CUT or INFO_REVEALED) slot.
+
+    Used by adjacent constraint checking when one side of the constraint
+    is a known slot not tracked by the solver.
+
+    Args:
+        game: The current game state.
+        player_index: The player whose stand to inspect.
+        slot_index: The slot index to inspect.
+
+    Returns:
+        The gameplay value (int 1-12, 'YELLOW', or 'RED'), or None if
+        the slot's identity cannot be determined.
+    """
+    slot = game.players[player_index].tile_stand.slots[slot_index]
+    if slot.wire is not None:
+        return slot.wire.gameplay_value
+    if slot.state == bomb_busters.SlotState.INFO_REVEALED:
+        if isinstance(slot.info_token, int):
+            return slot.info_token
+        if slot.info_token == "YELLOW":
+            return "YELLOW"
+    return None
+
+
 def _solve_backward(
     ctx: SolverContext,
     show_progress: bool = False,
+    game: bomb_busters.GameState | None = None,
 ) -> MemoDict:
     """Build the complete backward-solve memo.
 
@@ -603,6 +726,9 @@ def _solve_backward(
             root-level compositions as the progress metric — each
             composition for the first player represents a roughly
             comparable chunk of downstream work.
+        game: The game state, needed for adjacent constraint checking
+            when one side of the constraint is a known (CUT/INFO_REVEALED)
+            slot. Only required when adjacent constraints are present.
 
     Returns:
         Complete memo dict mapping (pli, remaining) -> MemoEntry.
@@ -613,6 +739,9 @@ def _solve_backward(
     positions_by_player = ctx.positions_by_player
     player_order = ctx.player_order
     must_have = ctx.must_have
+    must_not_have = ctx.must_not_have
+    adjacent_constraints = ctx.adjacent_constraints
+    slot_to_pos = ctx.slot_to_pos
 
     pbar = None
     if show_progress and _tqdm_module is not None:
@@ -639,6 +768,10 @@ def _solve_backward(
         positions = positions_by_player[p]
         num_pos = len(positions)
         required = must_have.get(p, set())
+        forbidden = must_not_have.get(p, set())
+        adj_list = adjacent_constraints.get(p, [])
+        p_slot_to_pos = slot_to_pos.get(p, {})
+        track_seen = bool(required or forbidden)
         rem = list(remaining)
         total = [0]
         slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
@@ -671,6 +804,55 @@ def _solve_backward(
                     pbar.update(1)
                 if required and not required.issubset(seen):
                     return
+                # Must-not-have check: prune if any forbidden value
+                # appears in this player's composition.
+                if forbidden and forbidden & seen:
+                    return
+                # Adjacent constraint check: reconstruct per-position
+                # wire assignment and verify constraints.
+                if adj_list:
+                    # Build position -> wire mapping from composition
+                    pos_wires: list[bomb_busters.Wire | None] = [None] * num_pos
+                    pos = 0
+                    for di in range(num_types):
+                        used = remaining[di] - rem[di]
+                        if used > 0:
+                            w_di = distinct_wires[di]
+                            for _ in range(used):
+                                pos_wires[pos] = w_di
+                                pos += 1
+                    for adj in adj_list:
+                        left_pi = p_slot_to_pos.get(adj.slot_index_left)
+                        right_pi = p_slot_to_pos.get(adj.slot_index_right)
+                        # Get gameplay values for each side.
+                        # If a slot is not in the solver (known/cut),
+                        # look it up from the game state.
+                        left_gv = (
+                            pos_wires[left_pi].gameplay_value
+                            if left_pi is not None
+                            and pos_wires[left_pi] is not None
+                            else _known_slot_gameplay_value(
+                                game, adj.player_index,
+                                adj.slot_index_left,
+                            )
+                        )
+                        right_gv = (
+                            pos_wires[right_pi].gameplay_value
+                            if right_pi is not None
+                            and pos_wires[right_pi] is not None
+                            else _known_slot_gameplay_value(
+                                game, adj.player_index,
+                                adj.slot_index_right,
+                            )
+                        )
+                        if left_gv is None or right_gv is None:
+                            continue  # Cannot check, skip
+                        if isinstance(adj, bomb_busters.AdjacentNotEqual):
+                            if left_gv == right_gv:
+                                return  # Constraint violated
+                        elif isinstance(adj, bomb_busters.AdjacentEqual):
+                            if left_gv != right_gv:
+                                return  # Constraint violated
                 new_remaining = tuple(rem)
                 sub_total = _solve(pli + 1, new_remaining)[0]
                 if sub_total == 0:
@@ -709,7 +891,7 @@ def _solve_backward(
                 rem[d] = saved - k
                 new_seen = (
                     seen | {w.gameplay_value}
-                    if k > 0 and required
+                    if k > 0 and track_seen
                     else seen
                 )
                 _compose(d + 1, pi + k, new_seen,
@@ -758,7 +940,7 @@ def build_solver(
     ctx = _setup_solver(game, active_player_index)
     if ctx is None:
         return None
-    memo = _solve_backward(ctx, show_progress=show_progress)
+    memo = _solve_backward(ctx, show_progress=show_progress, game=game)
     return ctx, memo
 
 
@@ -840,6 +1022,7 @@ def _guided_mc_sample(
     seed: int | None = None,
     max_attempts: int | None = None,
     show_progress: bool = False,
+    game: bomb_busters.GameState | None = None,
 ) -> tuple[
     dict[tuple[int, int], collections.Counter[bomb_busters.Wire]],
     MCSamples,
@@ -858,19 +1041,22 @@ def _guided_mc_sample(
     self-normalized importance sampling. This produces unbiased
     probability estimates.
 
-    The only source of rejection is must-have constraints from failed
-    dual cuts, which are checked after each player's composition is
-    sampled. Dead ends from must-have violations are rare.
+    The only source of rejection is must-have/must-not-have and adjacent
+    constraints, which are checked after each player's composition is
+    sampled. Dead ends from constraint violations are rare.
 
     Args:
         ctx: Solver context from _setup_solver().
         num_samples: Target number of valid samples to collect.
         seed: Optional random seed for reproducibility.
-        max_attempts: Maximum total attempts (including must-have
+        max_attempts: Maximum total attempts (including constraint
             rejections) before stopping. Defaults to
             ``num_samples * 5``.
         show_progress: If True, display a tqdm progress bar tracking
             valid samples collected.
+        game: The game state, needed for adjacent constraint checking
+            when one side is a known slot. Only required when adjacent
+            constraints are present.
 
     Returns:
         A tuple of (aggregated_probs, mc_samples), or None if zero
@@ -899,6 +1085,9 @@ def _guided_mc_sample(
         return None
 
     must_have = ctx.must_have
+    must_not_have = ctx.must_not_have
+    adjacent_constraints = ctx.adjacent_constraints
+    slot_to_pos = ctx.slot_to_pos
 
     result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
     raw_samples: list[dict[tuple[int, int], bomb_busters.Wire]] = []
@@ -993,19 +1182,24 @@ def _guided_mc_sample(
                 composition[d] = chosen_k
                 pi += chosen_k
 
-            # Check must-have constraints
+            # Check must-have and must-not-have constraints
             required = must_have.get(p)
-            if required:
+            forbidden = must_not_have.get(p)
+            if required or forbidden:
                 seen_values: set[int | str] = set()
                 for d in range(num_types):
                     if composition[d] > 0:
                         seen_values.add(distinct_wires[d].gameplay_value)
-                if not required.issubset(seen_values):
+                if required and not required.issubset(seen_values):
+                    dead_end = True
+                    break
+                if forbidden and forbidden & seen_values:
                     dead_end = True
                     break
 
             # Map composition to ascending sequence and record
             pi = 0
+            player_pos_wires: list[bomb_busters.Wire] = []
             for d in range(num_types):
                 wire = distinct_wires[d]
                 for _ in range(composition[d]):
@@ -1013,7 +1207,44 @@ def _guided_mc_sample(
                         assignments.append(
                             (p, positions[pi].slot_index, wire),
                         )
+                    player_pos_wires.append(wire)
                     pi += 1
+
+            # Check adjacent constraints
+            adj_list = adjacent_constraints.get(p)
+            if adj_list:
+                p_slot_to_pos = slot_to_pos.get(p, {})
+                for adj in adj_list:
+                    left_pi = p_slot_to_pos.get(adj.slot_index_left)
+                    right_pi = p_slot_to_pos.get(adj.slot_index_right)
+                    left_gv = (
+                        player_pos_wires[left_pi].gameplay_value
+                        if left_pi is not None
+                        else _known_slot_gameplay_value(
+                            game, adj.player_index,
+                            adj.slot_index_left,
+                        ) if game is not None else None
+                    )
+                    right_gv = (
+                        player_pos_wires[right_pi].gameplay_value
+                        if right_pi is not None
+                        else _known_slot_gameplay_value(
+                            game, adj.player_index,
+                            adj.slot_index_right,
+                        ) if game is not None else None
+                    )
+                    if left_gv is None or right_gv is None:
+                        continue
+                    if isinstance(adj, bomb_busters.AdjacentNotEqual):
+                        if left_gv == right_gv:
+                            dead_end = True
+                            break
+                    elif isinstance(adj, bomb_busters.AdjacentEqual):
+                        if left_gv != right_gv:
+                            dead_end = True
+                            break
+                if dead_end:
+                    break
 
             # Update pool
             for d in range(num_types):
@@ -1099,6 +1330,7 @@ def monte_carlo_probabilities(
         seed=seed,
         max_attempts=max_attempts if max_attempts is not None else None,
         show_progress=show_progress,
+        game=game,
     )
     return result[0] if result is not None else {}
 
@@ -1146,6 +1378,7 @@ def monte_carlo_analysis(
         seed=seed,
         max_attempts=max_attempts if max_attempts is not None else None,
         show_progress=show_progress,
+        game=game,
     )
     if result is None:
         return {}, None
@@ -1445,6 +1678,63 @@ def _enumerate_target_player(
     return total_count, match_count
 
 
+def _forward_pass_joint_check(
+    ctx: SolverContext,
+    memo: MemoDict,
+    target_player_index: int,
+    target_slot_indices: list[int],
+    check_fn: collections.abc.Callable[
+        [list[bomb_busters.Wire], list[int]], bool
+    ],
+) -> float:
+    """Compute a joint probability over multiple target slots.
+
+    Generic function for computing P(condition) over a set of target
+    slots on a single player's stand. The condition is defined by
+    ``check_fn``, which receives the full wire sequence for the target
+    player and the position indices of the target slots.
+
+    This is the shared plumbing for Double Detector, Triple Detector,
+    Super Detector, and red-wire risk queries.
+
+    Args:
+        ctx: Solver context.
+        memo: Prebuilt memo from _solve_backward().
+        target_player_index: Index of the target player.
+        target_slot_indices: Slot indices on the target's stand to
+            check. All must be hidden positions tracked by the solver.
+        check_fn: Called with ``(wire_sequence, target_position_indices)``
+            for each valid complete sequence. Returns True if the
+            condition is met.
+
+    Returns:
+        Probability that the condition is met (0.0 to 1.0).
+    """
+    result = _find_target_positions(
+        ctx, target_player_index, target_slot_indices,
+    )
+    if result is None:
+        return 0.0
+    target_pli, target_pos_indices = result
+
+    root_entry = memo.get((0, ctx.initial_pool))
+    if root_entry is None or root_entry[0] == 0:
+        return 0.0
+
+    frontier = _advance_frontier(ctx, memo, target_pli)
+
+    def _check(seq: list[bomb_busters.Wire], weight: int) -> bool:
+        return check_fn(seq, target_pos_indices)
+
+    total_count, match_count = _enumerate_target_player(
+        ctx, memo, target_pli, frontier, _check,
+    )
+
+    if total_count == 0:
+        return 0.0
+    return match_count / total_count
+
+
 def _forward_pass_dd(
     ctx: SolverContext,
     memo: MemoDict,
@@ -1469,33 +1759,18 @@ def _forward_pass_dd(
     Returns:
         Probability of success as a float between 0.0 and 1.0.
     """
-    result = _find_target_positions(
-        ctx, target_player_index, [slot_index_1, slot_index_2],
-    )
-    if result is None:
-        return 0.0
-    target_pli, target_pos_indices = result
-
-    # Check that root has valid distributions
-    root_entry = memo.get((0, ctx.initial_pool))
-    if root_entry is None or root_entry[0] == 0:
-        return 0.0
-
-    frontier = _advance_frontier(ctx, memo, target_pli)
-
-    def check_dd(seq: list[bomb_busters.Wire], weight: int) -> bool:
+    def check_dd(
+        seq: list[bomb_busters.Wire], pos_indices: list[int],
+    ) -> bool:
         return any(
             seq[tpi].gameplay_value == guessed_value
-            for tpi in target_pos_indices
+            for tpi in pos_indices
         )
 
-    total_count, match_count = _enumerate_target_player(
-        ctx, memo, target_pli, frontier, check_dd,
+    return _forward_pass_joint_check(
+        ctx, memo, target_player_index,
+        [slot_index_1, slot_index_2], check_dd,
     )
-
-    if total_count == 0:
-        return 0.0
-    return match_count / total_count
 
 
 def _forward_pass_red_dd(
@@ -1519,33 +1794,18 @@ def _forward_pass_red_dd(
     Returns:
         Probability that both slots are red wires (0.0 to 1.0).
     """
-    result = _find_target_positions(
-        ctx, target_player_index, [slot_index_1, slot_index_2],
-    )
-    if result is None or len(result[1]) != 2:
-        return 0.0
-    target_pli, target_pos_indices = result
-
-    # Check that root has valid distributions
-    root_entry = memo.get((0, ctx.initial_pool))
-    if root_entry is None or root_entry[0] == 0:
-        return 0.0
-
-    frontier = _advance_frontier(ctx, memo, target_pli)
-
-    def check_both_red(seq: list[bomb_busters.Wire], weight: int) -> bool:
+    def check_both_red(
+        seq: list[bomb_busters.Wire], pos_indices: list[int],
+    ) -> bool:
         return all(
             seq[tpi].color == bomb_busters.WireColor.RED
-            for tpi in target_pos_indices
+            for tpi in pos_indices
         )
 
-    total_count, match_count = _enumerate_target_player(
-        ctx, memo, target_pli, frontier, check_both_red,
+    return _forward_pass_joint_check(
+        ctx, memo, target_player_index,
+        [slot_index_1, slot_index_2], check_both_red,
     )
-
-    if total_count == 0:
-        return 0.0
-    return match_count / total_count
 
 
 # =============================================================================
@@ -1776,32 +2036,369 @@ def probability_of_red_wire_dd(
     )
 
 
+def probability_of_triple_detector(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+    slot_index_3: int,
+    guessed_value: int,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
+) -> float:
+    """Compute the probability that a Triple Detector succeeds.
+
+    Calculates P(at least one of the three target slots has the guessed
+    value). Uses joint enumeration, not naive independence.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index on the target's stand.
+        slot_index_2: Second slot index on the target's stand.
+        slot_index_3: Third slot index on the target's stand.
+        guessed_value: The blue value being guessed (1-12, not YELLOW).
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
+
+    Returns:
+        Probability of success as a float between 0.0 and 1.0.
+    """
+    if ctx is None or memo is None:
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
+        if solver is None:
+            return 0.0
+        ctx, memo = solver
+
+    def check_td(
+        seq: list[bomb_busters.Wire], pos_indices: list[int],
+    ) -> bool:
+        return any(
+            seq[tpi].gameplay_value == guessed_value
+            for tpi in pos_indices
+        )
+
+    return _forward_pass_joint_check(
+        ctx, memo, target_player_index,
+        [slot_index_1, slot_index_2, slot_index_3], check_td,
+    )
+
+
+def probability_of_super_detector(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    target_player_index: int,
+    guessed_value: int,
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
+) -> float:
+    """Compute the probability that a Super Detector succeeds.
+
+    Calculates P(at least one hidden slot on the target's stand has
+    the guessed value). Uses ALL hidden slot indices on the target's
+    stand.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        target_player_index: Index of the target player.
+        guessed_value: The blue value being guessed (1-12, not YELLOW).
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
+
+    Returns:
+        Probability of success as a float between 0.0 and 1.0.
+    """
+    if ctx is None or memo is None:
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
+        if solver is None:
+            return 0.0
+        ctx, memo = solver
+
+    target_hidden = game.players[target_player_index].tile_stand.hidden_slots
+    hidden_indices = [i for i, _ in target_hidden]
+    if not hidden_indices:
+        return 0.0
+
+    def check_sd(
+        seq: list[bomb_busters.Wire], pos_indices: list[int],
+    ) -> bool:
+        return any(
+            seq[tpi].gameplay_value == guessed_value
+            for tpi in pos_indices
+        )
+
+    return _forward_pass_joint_check(
+        ctx, memo, target_player_index, hidden_indices, check_sd,
+    )
+
+
+def probability_of_x_or_y_ray(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    target_player_index: int,
+    target_slot_index: int,
+    value1: int | str,
+    value2: int | str,
+    probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
+    | None = None,
+) -> float:
+    """Compute the probability that an X or Y Ray succeeds.
+
+    The X or Y Ray lets the actor state two values when pointing at
+    one wire. Success if the wire matches either value.
+
+    Since a slot holds exactly one wire, the events are mutually
+    exclusive: P(v1 or v2) = P(v1) + P(v2).
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        target_player_index: Index of the target player.
+        target_slot_index: Slot index on the target's stand.
+        value1: First guessed value (int 1-12 or 'YELLOW').
+        value2: Second guessed value (int 1-12 or 'YELLOW').
+        probs: Pre-computed position probabilities. If None, will be
+            computed internally.
+
+    Returns:
+        Probability of success as a float between 0.0 and 1.0.
+    """
+    if probs is None:
+        probs = compute_position_probabilities(game, active_player_index)
+    key = (target_player_index, target_slot_index)
+    if key not in probs:
+        return 0.0
+
+    counter = probs[key]
+    total = sum(counter.values())
+    if total == 0:
+        return 0.0
+
+    matching = sum(
+        count for wire, count in counter.items()
+        if wire.gameplay_value in (value1, value2)
+    )
+    return matching / total
+
+
+def probability_of_red_wire_multi(
+    game: bomb_busters.GameState,
+    active_player_index: int,
+    target_player_index: int,
+    slot_indices: list[int],
+    ctx: SolverContext | None = None,
+    memo: MemoDict | None = None,
+    show_progress: bool = False,
+) -> float:
+    """Compute P(all specified slots are red) for any number of slots.
+
+    Generalizes ``probability_of_red_wire_dd`` to any number of target
+    slots. For a single slot, equivalent to ``probability_of_red_wire``.
+
+    Args:
+        game: The current game state.
+        active_player_index: The observing player's index.
+        target_player_index: Index of the target player.
+        slot_indices: List of slot indices to check.
+        ctx: Pre-built solver context. If None, will be computed.
+        memo: Pre-built solver memo. If None, will be computed.
+        show_progress: If True and memo needs building, show progress.
+
+    Returns:
+        Probability that all specified slots are red (0.0 to 1.0).
+    """
+    if ctx is None or memo is None:
+        solver = build_solver(game, active_player_index, show_progress=show_progress)
+        if solver is None:
+            return 0.0
+        ctx, memo = solver
+
+    def check_all_red(
+        seq: list[bomb_busters.Wire], pos_indices: list[int],
+    ) -> bool:
+        return all(
+            seq[tpi].color == bomb_busters.WireColor.RED
+            for tpi in pos_indices
+        )
+
+    return _forward_pass_joint_check(
+        ctx, memo, target_player_index, slot_indices, check_all_red,
+    )
+
+
+# ── Monte Carlo counterparts for multi-slot detectors ────────
+
+
+def mc_multi_slot_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    slot_indices: list[int],
+    check_fn: collections.abc.Callable[
+        [list[bomb_busters.Wire | None]], bool
+    ],
+) -> float:
+    """Compute a joint probability from MC samples over multiple slots.
+
+    Generic MC function for any multi-slot condition.
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        slot_indices: Slot indices on the target's stand.
+        check_fn: Called with a list of Wire objects (one per slot,
+            in the same order as slot_indices). Returns True if the
+            condition is met.
+
+    Returns:
+        Probability that the condition is met (0.0 to 1.0).
+    """
+    keys = [(target_player_index, s) for s in slot_indices]
+    total_weight = 0
+    match_weight = 0
+    for sample, weight in zip(mc_samples.samples, mc_samples.weights):
+        total_weight += weight
+        wires = [sample.get(k) for k in keys]
+        if check_fn(wires):
+            match_weight += weight
+    if total_weight == 0:
+        return 0.0
+    return match_weight / total_weight
+
+
+def mc_td_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    slot_index_1: int,
+    slot_index_2: int,
+    slot_index_3: int,
+    guessed_value: int | str,
+) -> float:
+    """Compute Triple Detector probability from MC samples.
+
+    P(at least one of three target slots has the guessed value).
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        slot_index_1: First slot index.
+        slot_index_2: Second slot index.
+        slot_index_3: Third slot index.
+        guessed_value: The value being guessed.
+
+    Returns:
+        Probability of success (0.0 to 1.0).
+    """
+    def check(wires: list[bomb_busters.Wire | None]) -> bool:
+        return any(
+            w is not None and w.gameplay_value == guessed_value
+            for w in wires
+        )
+
+    return mc_multi_slot_probability(
+        mc_samples, target_player_index,
+        [slot_index_1, slot_index_2, slot_index_3], check,
+    )
+
+
+def mc_sd_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    hidden_slot_indices: list[int],
+    guessed_value: int | str,
+) -> float:
+    """Compute Super Detector probability from MC samples.
+
+    P(at least one hidden slot on target's stand has the guessed value).
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        hidden_slot_indices: All hidden slot indices on the target.
+        guessed_value: The value being guessed.
+
+    Returns:
+        Probability of success (0.0 to 1.0).
+    """
+    def check(wires: list[bomb_busters.Wire | None]) -> bool:
+        return any(
+            w is not None and w.gameplay_value == guessed_value
+            for w in wires
+        )
+
+    return mc_multi_slot_probability(
+        mc_samples, target_player_index,
+        hidden_slot_indices, check,
+    )
+
+
+def mc_red_multi_probability(
+    mc_samples: MCSamples,
+    target_player_index: int,
+    slot_indices: list[int],
+) -> float:
+    """Compute P(all specified slots are red) from MC samples.
+
+    Generalizes ``mc_red_dd_probability`` to any number of slots.
+
+    Args:
+        mc_samples: Raw MC samples from ``monte_carlo_analysis()``.
+        target_player_index: Index of the target player.
+        slot_indices: Slot indices to check.
+
+    Returns:
+        Probability that all slots are red (0.0 to 1.0).
+    """
+    def check(wires: list[bomb_busters.Wire | None]) -> bool:
+        return all(
+            w is not None and w.color == bomb_busters.WireColor.RED
+            for w in wires
+        )
+
+    return mc_multi_slot_probability(
+        mc_samples, target_player_index, slot_indices, check,
+    )
+
+
 def guaranteed_actions(
     game: bomb_busters.GameState,
     active_player_index: int,
     probs: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]
     | None = None,
+    include_equipment: set[EquipmentType] | None = None,
 ) -> dict[str, list | bool]:
     """Find all actions guaranteed to succeed.
 
     Identifies solo cuts, dual cuts with 100% probability, and whether
-    reveal-red-wires is available.
+    reveal-red-wires is available. When ``EquipmentType.FAST_PASS`` is
+    in ``include_equipment``, also includes fast-pass solo cuts.
 
     Args:
         game: The current game state.
         active_player_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
+        include_equipment: Set of equipment types to consider. Currently
+            only ``EquipmentType.FAST_PASS`` affects guaranteed actions.
 
     Returns:
         Dict with keys:
         - 'solo_cuts': list of (value, [slot_indices]) tuples
+        - 'fast_pass_solo_cuts': list of (value, [slot_indices]) tuples
         - 'dual_cuts': list of (target_player, target_slot, value) tuples
         - 'reveal_red': bool indicating if reveal red action is available
     """
     player = game.players[active_player_index]
+    equipment_set = include_equipment or set()
     result: dict[str, list | bool] = {
         "solo_cuts": [],
+        "fast_pass_solo_cuts": [],
         "dual_cuts": [],
         "reveal_red": False,
     }
@@ -1815,6 +2412,21 @@ def guaranteed_actions(
             and s.wire.gameplay_value == value
         ]
         result["solo_cuts"].append((value, slots))  # type: ignore[union-attr]
+
+    # Fast Pass solo cuts
+    if EquipmentType.FAST_PASS in equipment_set:
+        normal_solo = set(game.available_solo_cuts(active_player_index))
+        fast_pass_solo = set(
+            game.available_solo_cuts(active_player_index, fast_pass=True),
+        )
+        for value in fast_pass_solo - normal_solo:
+            slots = [
+                i for i, s in enumerate(player.tile_stand.slots)
+                if s.is_hidden
+                and s.wire is not None
+                and s.wire.gameplay_value == value
+            ]
+            result["fast_pass_solo_cuts"].append((value, slots))  # type: ignore[union-attr]
 
     # Reveal red: all remaining hidden wires are red
     hidden = player.tile_stand.hidden_slots
@@ -1882,21 +2494,28 @@ class RankedMove:
     """A possible move ranked by probability of success.
 
     Attributes:
-        action_type: 'dual_cut', 'solo_cut', 'double_detector', or 'reveal_red'.
-        target_player: Target player index (for dual cuts).
-        target_slot: Target slot index (for dual cuts).
-        second_slot: Second slot index (for double detector).
+        action_type: One of ``'dual_cut'``, ``'solo_cut'``,
+            ``'reveal_red'``, ``'double_detector'``,
+            ``'triple_detector'``, ``'super_detector'``,
+            ``'x_or_y_ray'``, or ``'fast_pass_solo'``.
+        target_player: Target player index (for dual cuts and detectors).
+        target_slot: Target slot index (for dual cuts and detectors).
+        second_slot: Second slot index (for Double/Triple Detector).
+        third_slot: Third slot index (for Triple Detector).
         guessed_value: The value being guessed.
+        second_value: Second guessed value (for X or Y Ray).
         probability: Probability of success (0.0 to 1.0).
         red_probability: Probability that the target slot is a red wire
-            (0.0 to 1.0). For Double Detector, this is the probability
-            that both target slots are red (the only way DD fails with red).
+            (0.0 to 1.0). For multi-slot detectors, this is the joint
+            probability that all target slots are red.
     """
     action_type: str
     target_player: int | None = None
     target_slot: int | None = None
     second_slot: int | None = None
+    third_slot: int | None = None
     guessed_value: int | str | None = None
+    second_value: int | str | None = None
     probability: float = 0.0
     red_probability: float = 0.0
 
@@ -1904,6 +2523,8 @@ class RankedMove:
         red = f" [RED {self.red_probability:.1%}]" if self.red_probability > 0 else ""
         if self.action_type == "solo_cut":
             return f"Solo Cut {self.guessed_value} (100%)"
+        elif self.action_type == "fast_pass_solo":
+            return f"Fast Pass Solo Cut {self.guessed_value} (100%)"
         elif self.action_type == "reveal_red":
             return f"Reveal Red Wires (100%)"
         elif self.action_type == "double_detector":
@@ -1911,6 +2532,26 @@ class RankedMove:
                 f"Double Detector P{self.target_player}"
                 f"[{self.target_slot},{self.second_slot}]"
                 f" = {self.guessed_value}"
+                f" ({self.probability:.1%}){red}"
+            )
+        elif self.action_type == "triple_detector":
+            return (
+                f"Triple Detector P{self.target_player}"
+                f"[{self.target_slot},{self.second_slot},{self.third_slot}]"
+                f" = {self.guessed_value}"
+                f" ({self.probability:.1%}){red}"
+            )
+        elif self.action_type == "super_detector":
+            return (
+                f"Super Detector P{self.target_player}"
+                f" = {self.guessed_value}"
+                f" ({self.probability:.1%}){red}"
+            )
+        elif self.action_type == "x_or_y_ray":
+            return (
+                f"X or Y Ray P{self.target_player}"
+                f"[{self.target_slot}]"
+                f" = {self.guessed_value} or {self.second_value}"
                 f" ({self.probability:.1%}){red}"
             )
         else:
@@ -1929,34 +2570,36 @@ def rank_all_moves(
     | None = None,
     ctx: SolverContext | None = None,
     memo: MemoDict | None = None,
-    include_dd: bool = False,
+    include_equipment: set[EquipmentType] | None = None,
     mc_samples: MCSamples | None = None,
 ) -> list[RankedMove]:
     """Rank all possible moves by probability of success.
 
     Considers solo cuts (always 100%), reveal red (always 100% if available),
     and all possible dual cut targets with their probabilities. Optionally
-    includes Double Detector moves for all valid slot pairs.
+    includes equipment-based moves (Double Detector, Triple Detector,
+    Super Detector, X or Y Ray, Fast Pass) when specified.
 
     Args:
         game: The current game state.
         active_player_index: The observing player's index (the active player).
         probs: Pre-computed position probabilities. If None, will be
             computed internally.
-        ctx: Pre-built solver context (needed for exact DD moves).
-        memo: Pre-built solver memo (needed for exact DD moves).
-        include_dd: If True, also enumerate Double Detector moves for
-            all pairs of hidden slots on each target player. Uses
-            mc_samples if provided, otherwise ctx/memo.
-        mc_samples: Raw MC samples for joint DD probability computation.
-            When provided with ``include_dd=True``, DD probabilities are
-            computed from the MC samples instead of the exact solver.
+        ctx: Pre-built solver context (needed for exact joint moves).
+        memo: Pre-built solver memo (needed for exact joint moves).
+        include_equipment: Set of equipment types to include in ranking.
+            ``None`` (default) means no equipment moves. Example:
+            ``{EquipmentType.DOUBLE_DETECTOR, EquipmentType.TRIPLE_DETECTOR}``.
+        mc_samples: Raw MC samples for joint probability computation.
+            When provided, equipment probabilities are computed from
+            the MC samples instead of the exact solver.
 
     Returns:
         List of RankedMove objects sorted by probability descending.
     """
     moves: list[RankedMove] = []
     player = game.players[active_player_index]
+    equipment_set = include_equipment or set()
 
     # Solo cuts (guaranteed 100%)
     for value in game.available_solo_cuts(active_player_index):
@@ -1990,7 +2633,7 @@ def rank_all_moves(
         if slot.is_hidden and slot.wire is not None:
             observer_values.add(slot.wire.gameplay_value)
 
-    # Blue values the observer holds (DD only works with blue)
+    # Blue values the observer holds (detectors only work with blue)
     observer_blue_values: set[int] = {
         v for v in observer_values if isinstance(v, int)
     }
@@ -2053,8 +2696,33 @@ def rank_all_moves(
                 red_probability=0.0,
             ))
 
+    # Fast Pass solo cuts
+    if EquipmentType.FAST_PASS in equipment_set:
+        normal_solo = set(game.available_solo_cuts(active_player_index))
+        fast_pass_solo = set(
+            game.available_solo_cuts(active_player_index, fast_pass=True),
+        )
+        for value in fast_pass_solo - normal_solo:
+            moves.append(RankedMove(
+                action_type="fast_pass_solo",
+                guessed_value=value,
+                probability=1.0,
+            ))
+
+    # ── Equipment-based moves ─────────────────────────────────
+    # Build solver ctx/memo lazily if needed for exact equipment moves
+    def _ensure_solver() -> None:
+        nonlocal ctx, memo
+        if ctx is None or memo is None:
+            solver = build_solver(game, active_player_index)
+            if solver is not None:
+                ctx, memo = solver
+
     # Double Detector moves
-    if include_dd and observer_blue_values:
+    if (
+        EquipmentType.DOUBLE_DETECTOR in equipment_set
+        and observer_blue_values
+    ):
         dd_available = (
             player.character_card is not None
             and player.character_card.name == "Double Detector"
@@ -2062,7 +2730,6 @@ def rank_all_moves(
         )
         if dd_available:
             if mc_samples is not None:
-                # MC path: compute DD from raw per-sample assignments
                 for p_idx in range(len(game.players)):
                     if p_idx == active_player_index:
                         continue
@@ -2093,11 +2760,7 @@ def rank_all_moves(
                                         red_probability=dd_red,
                                     ))
             else:
-                # Exact solver path
-                if ctx is None or memo is None:
-                    solver = build_solver(game, active_player_index)
-                    if solver is not None:
-                        ctx, memo = solver
+                _ensure_solver()
                 if ctx is not None and memo is not None:
                     for p_idx in range(len(game.players)):
                         if p_idx == active_player_index:
@@ -2128,6 +2791,190 @@ def rank_all_moves(
                                             probability=dd_prob,
                                             red_probability=dd_red,
                                         ))
+
+    # Triple Detector moves
+    if (
+        EquipmentType.TRIPLE_DETECTOR in equipment_set
+        and observer_blue_values
+    ):
+        if mc_samples is not None:
+            for p_idx in range(len(game.players)):
+                if p_idx == active_player_index:
+                    continue
+                target_hidden = (
+                    game.players[p_idx].tile_stand.hidden_slots
+                )
+                hidden_indices = [i for i, _ in target_hidden]
+                for a in range(len(hidden_indices)):
+                    for b in range(a + 1, len(hidden_indices)):
+                        for c in range(b + 1, len(hidden_indices)):
+                            s1 = hidden_indices[a]
+                            s2 = hidden_indices[b]
+                            s3 = hidden_indices[c]
+                            for value in observer_blue_values:
+                                td_prob = mc_td_probability(
+                                    mc_samples, p_idx,
+                                    s1, s2, s3, value,
+                                )
+                                if td_prob > 0:
+                                    td_red = mc_red_multi_probability(
+                                        mc_samples, p_idx,
+                                        [s1, s2, s3],
+                                    )
+                                    moves.append(RankedMove(
+                                        action_type="triple_detector",
+                                        target_player=p_idx,
+                                        target_slot=s1,
+                                        second_slot=s2,
+                                        third_slot=s3,
+                                        guessed_value=value,
+                                        probability=td_prob,
+                                        red_probability=td_red,
+                                    ))
+        else:
+            _ensure_solver()
+            if ctx is not None and memo is not None:
+                for p_idx in range(len(game.players)):
+                    if p_idx == active_player_index:
+                        continue
+                    target_hidden = (
+                        game.players[p_idx].tile_stand.hidden_slots
+                    )
+                    hidden_indices = [i for i, _ in target_hidden]
+                    for a in range(len(hidden_indices)):
+                        for b in range(a + 1, len(hidden_indices)):
+                            for c in range(b + 1, len(hidden_indices)):
+                                s1 = hidden_indices[a]
+                                s2 = hidden_indices[b]
+                                s3 = hidden_indices[c]
+                                for value in observer_blue_values:
+                                    td_prob = _forward_pass_joint_check(
+                                        ctx, memo, p_idx,
+                                        [s1, s2, s3],
+                                        lambda seq, pis, v=value: any(
+                                            seq[pi].gameplay_value == v
+                                            for pi in pis
+                                        ),
+                                    )
+                                    if td_prob > 0:
+                                        td_red = probability_of_red_wire_multi(
+                                            game, active_player_index,
+                                            p_idx, [s1, s2, s3],
+                                            ctx=ctx, memo=memo,
+                                        )
+                                        moves.append(RankedMove(
+                                            action_type="triple_detector",
+                                            target_player=p_idx,
+                                            target_slot=s1,
+                                            second_slot=s2,
+                                            third_slot=s3,
+                                            guessed_value=value,
+                                            probability=td_prob,
+                                            red_probability=td_red,
+                                        ))
+
+    # Super Detector moves
+    if (
+        EquipmentType.SUPER_DETECTOR in equipment_set
+        and observer_blue_values
+    ):
+        if mc_samples is not None:
+            for p_idx in range(len(game.players)):
+                if p_idx == active_player_index:
+                    continue
+                target_hidden = (
+                    game.players[p_idx].tile_stand.hidden_slots
+                )
+                hidden_indices = [i for i, _ in target_hidden]
+                if not hidden_indices:
+                    continue
+                for value in observer_blue_values:
+                    sd_prob = mc_sd_probability(
+                        mc_samples, p_idx,
+                        hidden_indices, value,
+                    )
+                    if sd_prob > 0:
+                        sd_red = mc_red_multi_probability(
+                            mc_samples, p_idx, hidden_indices,
+                        )
+                        moves.append(RankedMove(
+                            action_type="super_detector",
+                            target_player=p_idx,
+                            guessed_value=value,
+                            probability=sd_prob,
+                            red_probability=sd_red,
+                        ))
+        else:
+            _ensure_solver()
+            if ctx is not None and memo is not None:
+                for p_idx in range(len(game.players)):
+                    if p_idx == active_player_index:
+                        continue
+                    target_hidden = (
+                        game.players[p_idx].tile_stand.hidden_slots
+                    )
+                    hidden_indices = [i for i, _ in target_hidden]
+                    if not hidden_indices:
+                        continue
+                    for value in observer_blue_values:
+                        sd_prob = probability_of_super_detector(
+                            game, active_player_index,
+                            p_idx, value,
+                            ctx=ctx, memo=memo,
+                        )
+                        if sd_prob > 0:
+                            sd_red = probability_of_red_wire_multi(
+                                game, active_player_index,
+                                p_idx, hidden_indices,
+                                ctx=ctx, memo=memo,
+                            )
+                            moves.append(RankedMove(
+                                action_type="super_detector",
+                                target_player=p_idx,
+                                guessed_value=value,
+                                probability=sd_prob,
+                                red_probability=sd_red,
+                            ))
+
+    # X or Y Ray moves
+    if EquipmentType.X_OR_Y_RAY in equipment_set and observer_values:
+        # X or Y Ray: state 2 values for 1 wire. Observer must have
+        # both values in hand. Works with YELLOW.
+        observer_value_list = sorted(
+            observer_values,
+            key=lambda v: (0, v) if isinstance(v, int) else (1, 0),
+        )
+        for p_idx in range(len(game.players)):
+            if p_idx == active_player_index:
+                continue
+            target_hidden = (
+                game.players[p_idx].tile_stand.hidden_slots
+            )
+            for s_idx, _ in target_hidden:
+                for a_i in range(len(observer_value_list)):
+                    for b_i in range(a_i + 1, len(observer_value_list)):
+                        v1 = observer_value_list[a_i]
+                        v2 = observer_value_list[b_i]
+                        xy_prob = probability_of_x_or_y_ray(
+                            game, active_player_index,
+                            p_idx, s_idx, v1, v2,
+                            probs=probs,
+                        )
+                        if xy_prob > 0:
+                            # Red probability: single slot
+                            red_prob = probability_of_red_wire(
+                                game, active_player_index,
+                                p_idx, s_idx, probs=probs,
+                            )
+                            moves.append(RankedMove(
+                                action_type="x_or_y_ray",
+                                target_player=p_idx,
+                                target_slot=s_idx,
+                                guessed_value=v1,
+                                second_value=v2,
+                                probability=xy_prob,
+                                red_probability=red_prob,
+                            ))
 
     # Sort by probability descending
     moves.sort(key=lambda m: m.probability, reverse=True)
@@ -2581,6 +3428,9 @@ def _format_move(
     if move.action_type == "solo_cut":
         label = f"{_C.GREEN}⚡ Solo Cut{_C.RESET}"
         return f"  {num} {prob}  {label} {val}"
+    elif move.action_type == "fast_pass_solo":
+        label = f"{_C.GREEN}⚡ Fast Pass Solo{_C.RESET}"
+        return f"  {num} {prob}  {label} {val}"
     elif move.action_type == "reveal_red":
         label = f"{_C.RED}◆ Reveal Red Wires{_C.RESET}"
         return f"  {num} {prob}  {label}"
@@ -2604,6 +3454,41 @@ def _format_move(
             f"  {num} {prob}  {label} → {target}"
             f" [{_C.BOLD}{s1},{s2}{_C.RESET}] = {val}{red}"
         )
+    elif (
+        move.action_type == "triple_detector"
+        and move.target_player is not None
+    ):
+        target = _player_name(game, move.target_player)
+        s1 = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
+        s2 = _slot_letter(move.second_slot) if move.second_slot is not None else "?"
+        s3 = _slot_letter(move.third_slot) if move.third_slot is not None else "?"
+        label = f"{_C.YELLOW}⚙ Triple Detector{_C.RESET}"
+        return (
+            f"  {num} {prob}  {label} → {target}"
+            f" [{_C.BOLD}{s1},{s2},{s3}{_C.RESET}] = {val}{red}"
+        )
+    elif (
+        move.action_type == "super_detector"
+        and move.target_player is not None
+    ):
+        target = _player_name(game, move.target_player)
+        label = f"{_C.YELLOW}⚙ Super Detector{_C.RESET}"
+        return (
+            f"  {num} {prob}  {label} → {target}"
+            f" = {val}{red}"
+        )
+    elif (
+        move.action_type == "x_or_y_ray"
+        and move.target_player is not None
+    ):
+        target = _player_name(game, move.target_player)
+        slot = _slot_letter(move.target_slot) if move.target_slot is not None else "?"
+        val2 = _value_label(move.second_value) if move.second_value is not None else "?"
+        label = f"{_C.YELLOW}⚙ X or Y Ray{_C.RESET}"
+        return (
+            f"  {num} {prob}  {label} → {target}"
+            f" [{_C.BOLD}{slot}{_C.RESET}] = {val} or {val2}{red}"
+        )
     return f"  {num} {prob}  {move}"
 
 
@@ -2612,7 +3497,7 @@ def print_probability_analysis(
     active_player_index: int,
     max_moves: int = 10,
     show_progress: bool = True,
-    include_dd: bool = False,
+    include_equipment: set[EquipmentType] | None = None,
     mc_threshold: int = MC_POSITION_THRESHOLD,
     mc_num_samples: int = 10_000,
 ) -> None:
@@ -2628,7 +3513,9 @@ def print_probability_analysis(
         max_moves: Maximum number of ranked moves to display.
         show_progress: If True (default), show a tqdm progress bar
             during the backward solve.
-        include_dd: If True, include Double Detector moves in ranking.
+        include_equipment: Set of equipment types to include in ranking.
+            ``None`` (default) means no equipment moves. Example:
+            ``{EquipmentType.DOUBLE_DETECTOR}`` for DD moves only.
         mc_threshold: Hidden position count above which Monte Carlo
             is used instead of the exact solver. Set to 0 to always
             use Monte Carlo, or a very large number to always use
@@ -2678,18 +3565,28 @@ def print_probability_analysis(
             probs = {}
 
     # Guaranteed actions
-    ga = guaranteed_actions(game, active_player_index, probs=probs)
+    ga = guaranteed_actions(
+        game, active_player_index, probs=probs,
+        include_equipment=include_equipment,
+    )
     solo_cuts: list[tuple[int | str, list[int]]] = ga["solo_cuts"]  # type: ignore[assignment]
+    fp_solo_cuts: list[tuple[int | str, list[int]]] = ga["fast_pass_solo_cuts"]  # type: ignore[assignment]
     guaranteed_duals: list[tuple[int, int, int | str]] = ga["dual_cuts"]  # type: ignore[assignment]
     reveal_red: bool = ga["reveal_red"]  # type: ignore[assignment]
 
-    has_guaranteed = solo_cuts or guaranteed_duals or reveal_red
+    has_guaranteed = solo_cuts or fp_solo_cuts or guaranteed_duals or reveal_red
     if has_guaranteed:
         print(f"  {_C.GREEN}{_C.BOLD}Guaranteed actions:{_C.RESET}")
         for value, slots in solo_cuts:
             slot_letters = ", ".join(_slot_letter(s) for s in slots)
             print(
                 f"    • Solo Cut {_value_label(value)}"
+                f" (slots {slot_letters})"
+            )
+        for value, slots in fp_solo_cuts:
+            slot_letters = ", ".join(_slot_letter(s) for s in slots)
+            print(
+                f"    • Fast Pass Solo {_value_label(value)}"
                 f" (slots {slot_letters})"
             )
         for p_idx, s_idx, value in guaranteed_duals:
@@ -2706,7 +3603,7 @@ def print_probability_analysis(
     # Ranked moves
     moves = rank_all_moves(
         game, active_player_index, probs=probs,
-        ctx=ctx, memo=memo, include_dd=include_dd,
+        ctx=ctx, memo=memo, include_equipment=include_equipment,
         mc_samples=mc_samples_data,
     )
 
@@ -2714,22 +3611,28 @@ def print_probability_analysis(
         print(f"  {_C.DIM}No available moves.{_C.RESET}")
         return
 
-    # Deduplicate DD moves: keep only the best pair per (player, value).
-    # Without this, a single high-probability slot generates many DD
-    # entries pairing it with every other slot on the same stand.
-    seen_dd: set[tuple[int | None, int | str | None]] = set()
+    # Deduplicate detector moves: keep only the best slot combination
+    # per (player, value) for each detector type. Without this, a
+    # single high-probability slot generates many entries pairing it
+    # with every other slot on the same stand.
+    _DEDUP_TYPES = {"double_detector", "triple_detector"}
+    seen_dedup: dict[str, set[tuple[int | None, int | str | None]]] = {}
     deduped: list[RankedMove] = []
     for move in moves:
-        if move.action_type == "double_detector":
-            dd_key = (move.target_player, move.guessed_value)
-            if dd_key in seen_dd:
+        if move.action_type in _DEDUP_TYPES:
+            seen = seen_dedup.setdefault(move.action_type, set())
+            dedup_key = (move.target_player, move.guessed_value)
+            if dedup_key in seen:
                 continue
-            seen_dd.add(dd_key)
+            seen.add(dedup_key)
         deduped.append(move)
     moves = deduped
 
     has_red_wires = any(
         w.color == bomb_busters.WireColor.RED for w in game.wires_in_play
+    ) or any(
+        g.color == bomb_busters.WireColor.RED
+        for g in game.uncertain_wire_groups
     )
 
     shown = moves[:max_moves]

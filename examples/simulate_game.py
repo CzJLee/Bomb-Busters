@@ -275,8 +275,8 @@ def main() -> None:
     game = bomb_busters.GameState.create_game(
         player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
         yellow_wires=(2, 3),
-        red_wires=(1, 2),
-        seed=42,
+        red_wires=3,
+        seed=2,
     )
 
     # Show initial game state (god mode)
@@ -372,11 +372,15 @@ def main() -> None:
         )
         use_mc = position_count > compute_probabilities.MC_POSITION_THRESHOLD
 
-        include_dd = (
+        include_equipment: set[compute_probabilities.EquipmentType] | None = None
+        if (
             player.character_card is not None
             and player.character_card.name == "Double Detector"
             and not player.character_card.used
-        )
+        ):
+            include_equipment = {
+                compute_probabilities.EquipmentType.DOUBLE_DETECTOR,
+            }
 
         if use_mc:
             # Monte Carlo path
@@ -390,7 +394,7 @@ def main() -> None:
             )
             moves = compute_probabilities.rank_all_moves(
                 game, player_index, probs=probs,
-                include_dd=include_dd,
+                include_equipment=include_equipment,
                 mc_samples=mc_samples,
             )
             elapsed = time.perf_counter() - t0
@@ -416,7 +420,7 @@ def main() -> None:
                 )
             moves = compute_probabilities.rank_all_moves(
                 game, player_index, probs=probs,
-                ctx=ctx, memo=memo, include_dd=include_dd,
+                ctx=ctx, memo=memo, include_equipment=include_equipment,
             )
             elapsed = time.perf_counter() - t0
             total_action_time += elapsed

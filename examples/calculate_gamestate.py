@@ -14,8 +14,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import bomb_busters
 import compute_probabilities
 
-# Toggle to include Double Detector moves in probability analysis.
-INCLUDE_DOUBLE_DETECTOR = True
+# Equipment types to include in probability analysis.
+INCLUDE_EQUIPMENT = {compute_probabilities.EquipmentType.DOUBLE_DETECTOR}
 
 
 # ── Main ────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ def main() -> None:
     # ── Probability analysis ────────────────────────────────
     compute_probabilities.print_probability_analysis(
         game, active_player_index=0, max_moves=20,
-        include_dd=INCLUDE_DOUBLE_DETECTOR,
+        include_equipment=INCLUDE_EQUIPMENT,
     )
 
 

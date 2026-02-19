@@ -80,6 +80,187 @@ class MarkerState(enum.Enum):
 
 
 # =============================================================================
+# Constraint Enums
+# =============================================================================
+
+class Parity(enum.Enum):
+    """Parity of a wire value for even/odd indicator tokens.
+
+    Used with ``SlotParity`` constraints when even/odd tokens are in play.
+    """
+    EVEN = enum.auto()  # 2, 4, 6, 8, 10, 12
+    ODD = enum.auto()   # 1, 3, 5, 7, 9, 11
+
+
+class Multiplicity(enum.Enum):
+    """How many copies of a wire value exist on a tile stand.
+
+    Used with ``ValueMultiplicity`` constraints when x1/x2/x3 tokens
+    are in play.
+    """
+    SINGLE = 1   # x1 token
+    DOUBLE = 2   # x2 token
+    TRIPLE = 3   # x3 token
+
+
+# =============================================================================
+# Slot Constraints
+# =============================================================================
+
+@dataclasses.dataclass(frozen=True)
+class SlotConstraint:
+    """Base class for all game state constraints.
+
+    All constraints are frozen (immutable) for hashability and safety.
+    Subclasses define specific constraint semantics that the probability
+    solver can consume.
+
+    Attributes:
+        player_index: Index of the player this constraint applies to.
+    """
+    player_index: int
+
+    def describe(self) -> str:
+        """Human-readable description for display."""
+        raise NotImplementedError
+
+
+@dataclasses.dataclass(frozen=True)
+class AdjacentNotEqual(SlotConstraint):
+    """Two adjacent slots must have different gameplay values.
+
+    Used by Label != equipment (#1). Reminder: any two yellow wires
+    or any two red wires are always considered identical, so they
+    cannot be "different".
+
+    Attributes:
+        slot_index_left: Left slot index (must be slot_index_right - 1).
+        slot_index_right: Right slot index.
+    """
+    slot_index_left: int
+    slot_index_right: int
+
+    def describe(self) -> str:
+        left = chr(ord("A") + self.slot_index_left)
+        right = chr(ord("A") + self.slot_index_right)
+        return f"P{self.player_index} [{left}] != [{right}]"
+
+
+@dataclasses.dataclass(frozen=True)
+class AdjacentEqual(SlotConstraint):
+    """Two adjacent slots must have the same gameplay value.
+
+    Used by Label = equipment (#12). Yellow-yellow and red-red count
+    as "same" by gameplay value.
+
+    Attributes:
+        slot_index_left: Left slot index (must be slot_index_right - 1).
+        slot_index_right: Right slot index.
+    """
+    slot_index_left: int
+    slot_index_right: int
+
+    def describe(self) -> str:
+        left = chr(ord("A") + self.slot_index_left)
+        right = chr(ord("A") + self.slot_index_right)
+        return f"P{self.player_index} [{left}] = [{right}]"
+
+
+@dataclasses.dataclass(frozen=True)
+class MustHaveValue(SlotConstraint):
+    """Player must have at least one uncut wire of a specific value.
+
+    Sources: General Radar "yes" (#8), failed dual cuts.
+
+    Attributes:
+        value: The gameplay value (int 1-12 or 'YELLOW').
+        source: Optional description of how this was determined.
+    """
+    value: int | str
+    source: str = ""
+
+    def describe(self) -> str:
+        src = f" ({self.source})" if self.source else ""
+        return f"P{self.player_index} has {self.value}{src}"
+
+
+@dataclasses.dataclass(frozen=True)
+class MustNotHaveValue(SlotConstraint):
+    """Player must NOT have any uncut wire of a specific value.
+
+    Sources: General Radar "no" response (#8).
+
+    Attributes:
+        value: The gameplay value (int 1-12 or 'YELLOW').
+        source: Optional description of how this was determined.
+    """
+    value: int | str
+    source: str = ""
+
+    def describe(self) -> str:
+        src = f" ({self.source})" if self.source else ""
+        return f"P{self.player_index} does not have {self.value}{src}"
+
+
+@dataclasses.dataclass(frozen=True)
+class SlotParity(SlotConstraint):
+    """A slot is known to be even or odd from even/odd indicator tokens.
+
+    Not enforced by the solver in this version — reserved for future
+    indicator token system.
+
+    Attributes:
+        slot_index: The slot this constraint applies to.
+        parity: Whether the slot is even or odd.
+    """
+    slot_index: int
+    parity: Parity
+
+    def describe(self) -> str:
+        letter = chr(ord("A") + self.slot_index)
+        return f"P{self.player_index} [{letter}] is {self.parity.name.lower()}"
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueMultiplicity(SlotConstraint):
+    """Wire value appears exactly N times on this stand (x1/x2/x3 tokens).
+
+    Not enforced by the solver in this version — reserved for future
+    indicator token system.
+
+    Attributes:
+        slot_index: The slot the token is placed on.
+        multiplicity: How many copies of this value exist on the stand.
+    """
+    slot_index: int
+    multiplicity: Multiplicity
+
+    def describe(self) -> str:
+        letter = chr(ord("A") + self.slot_index)
+        return (
+            f"P{self.player_index} [{letter}] value appears "
+            f"x{self.multiplicity.value}"
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class UnsortedSlot(SlotConstraint):
+    """A slot is not sorted with the rest of the stand (X tokens).
+
+    Not enforced by the solver in this version — reserved for future
+    indicator token system.
+
+    Attributes:
+        slot_index: The unsorted slot index.
+    """
+    slot_index: int
+
+    def describe(self) -> str:
+        letter = chr(ord("A") + self.slot_index)
+        return f"P{self.player_index} [{letter}] is unsorted"
+
+
+# =============================================================================
 # Wire
 # =============================================================================
 
@@ -1309,6 +1490,9 @@ class GameState:
         captain_index: Index of the player who is the captain. The
             captain deals first, indicates first, and takes the first
             turn. Defaults to 0.
+        slot_constraints: List of SlotConstraint objects representing
+            game constraints from equipment cards, General Radar, etc.
+            Used by the probability engine to prune invalid distributions.
     """
     players: list[Player]
     detonator: Detonator
@@ -1324,6 +1508,9 @@ class GameState:
     )
     active_player_index: int | None = None
     captain_index: int = 0
+    slot_constraints: list[SlotConstraint] = dataclasses.field(
+        default_factory=list,
+    )
 
     @property
     def validation_tokens(self) -> set[int]:
@@ -1343,6 +1530,30 @@ class GameState:
                     assert isinstance(v, int)
                     counts[v] = counts.get(v, 0) + 1
         return {v for v, c in counts.items() if c >= 4}
+
+    def add_constraint(self, constraint: SlotConstraint) -> None:
+        """Add a constraint to the game state.
+
+        Args:
+            constraint: The constraint to add.
+        """
+        self.slot_constraints.append(constraint)
+
+    def get_constraints_for_player(
+        self, player_index: int
+    ) -> list[SlotConstraint]:
+        """Get all constraints that apply to a specific player.
+
+        Args:
+            player_index: The player to query.
+
+        Returns:
+            List of constraints for that player.
+        """
+        return [
+            c for c in self.slot_constraints
+            if c.player_index == player_index
+        ]
 
     # -----------------------------------------------------------------
     # Factory: Full Simulation Mode
@@ -1501,6 +1712,7 @@ class GameState:
         blue_wires: list[Wire] | tuple[int, int] | None = None,
         yellow_wires: list[int] | tuple[list[int], int] | None = None,
         red_wires: list[int] | tuple[list[int], int] | None = None,
+        constraints: list[SlotConstraint] | None = None,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -1538,6 +1750,9 @@ class GameState:
             red_wires: Red wire specification. Same semantics as
                 ``yellow_wires``. ``[4]`` = R4 definitely in play.
                 ``([3, 7], 1)`` = 1-of-2 uncertain.
+            constraints: List of ``SlotConstraint`` objects (e.g.,
+                ``AdjacentNotEqual``, ``MustHaveValue``). These are
+                passed through to ``GameState.slot_constraints``.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1587,6 +1802,7 @@ class GameState:
             current_player_index=active_player_index,
             active_player_index=active_player_index,
             captain_index=captain,
+            slot_constraints=constraints or [],
         )
 
     # -----------------------------------------------------------------
@@ -2014,11 +2230,19 @@ class GameState:
                     count += 1
         return count
 
-    def can_solo_cut(self, player_index: int, value: int | str) -> bool:
+    def can_solo_cut(
+        self,
+        player_index: int,
+        value: int | str,
+        fast_pass: bool = False,
+    ) -> bool:
         """Check if a player can perform a solo cut for a given value.
 
         Solo cut requires that ALL remaining uncut wires of this value
-        are in the player's hand.
+        are in the player's hand. With ``fast_pass=True`` (Fast Pass
+        Card, equipment #9.9), the player can solo cut 2 identical
+        wires even if they are not the last remaining wires of that
+        value.
 
         In calculator mode, other players' hidden wires are ``None``
         (unknown), so we cannot inspect them directly. Instead, we
@@ -2030,6 +2254,8 @@ class GameState:
         Args:
             player_index: The player to check.
             value: The wire value (int 1-12 or 'YELLOW').
+            fast_pass: If True, skip the "all remaining must be in
+                hand" check. Only require 2 hidden wires of this value.
 
         Returns:
             True if the player can solo cut this value.
@@ -2047,6 +2273,10 @@ class GameState:
 
         if player_hidden_count < 2:
             return False
+
+        # Fast Pass: only need 2 matching hidden wires, no ownership check
+        if fast_pass:
+            return True
 
         # Total wires of this value known to exist in the game.
         total_in_game = sum(
@@ -2097,11 +2327,16 @@ class GameState:
 
         return player_hidden_count in (2, 4)
 
-    def available_solo_cuts(self, player_index: int) -> list[int | str]:
+    def available_solo_cuts(
+        self,
+        player_index: int,
+        fast_pass: bool = False,
+    ) -> list[int | str]:
         """List all values the player can solo cut.
 
         Args:
             player_index: The player to check.
+            fast_pass: If True, use Fast Pass rules (see ``can_solo_cut``).
 
         Returns:
             List of gameplay values that can be solo cut.
@@ -2112,7 +2347,300 @@ class GameState:
             if slot.is_hidden and slot.wire is not None:
                 possible_values.add(slot.wire.gameplay_value)
 
-        return [v for v in possible_values if self.can_solo_cut(player_index, v)]
+        return [
+            v for v in possible_values
+            if self.can_solo_cut(player_index, v, fast_pass=fast_pass)
+        ]
+
+    # -----------------------------------------------------------------
+    # Game State Modification Methods
+    # -----------------------------------------------------------------
+
+    def place_info_token(self, player_index: int, slot_index: int) -> None:
+        """Mark a hidden blue wire as INFO_REVEALED with its value.
+
+        Used by Post-It equipment (#4) and other effects that publicly
+        reveal a wire's identity. The wire must be a hidden blue wire
+        with a known identity (not None).
+
+        Args:
+            player_index: Index of the player whose stand to modify.
+            slot_index: The slot index to reveal.
+
+        Raises:
+            ValueError: If the slot is not hidden or the wire is not
+                a known blue wire.
+        """
+        player = self.players[player_index]
+        slot = player.tile_stand.slots[slot_index]
+        if not slot.is_hidden:
+            raise ValueError(
+                f"Slot {slot_index} on player {player_index} is not hidden"
+            )
+        if slot.wire is None:
+            raise ValueError(
+                f"Slot {slot_index} on player {player_index} has unknown "
+                f"wire (calculator mode — use TileStand.place_info_token "
+                f"directly for known values)"
+            )
+        if slot.wire.color != WireColor.BLUE:
+            raise ValueError(
+                f"Slot {slot_index} on player {player_index} is not a "
+                f"blue wire (is {slot.wire.color.name})"
+            )
+        value = slot.wire.gameplay_value
+        player.tile_stand.place_info_token(slot_index, value)
+
+    def adjust_detonator(self, delta: int) -> None:
+        """Change the detonator failure count by delta.
+
+        Positive delta advances the detonator (more failures).
+        Negative delta moves it back (used by Rewinder, equipment #6).
+        The result is clamped to [0, max_failures].
+
+        Args:
+            delta: Amount to change failures by (positive or negative).
+        """
+        new_failures = self.detonator.failures + delta
+        self.detonator.failures = max(
+            0, min(new_failures, self.detonator.max_failures)
+        )
+
+    def set_detonator(self, mistakes_remaining: int) -> None:
+        """Set the detonator to a specific mistakes-remaining value.
+
+        Args:
+            mistakes_remaining: Number of remaining mistakes allowed.
+
+        Raises:
+            ValueError: If the value is out of valid range.
+        """
+        if not (0 <= mistakes_remaining <= self.detonator.max_failures):
+            raise ValueError(
+                f"mistakes_remaining must be 0-{self.detonator.max_failures}, "
+                f"got {mistakes_remaining}"
+            )
+        self.detonator.failures = (
+            self.detonator.max_failures - mistakes_remaining
+        )
+
+    def reactivate_character_cards(
+        self, player_indices: list[int]
+    ) -> None:
+        """Reset character cards from used to available.
+
+        Used by Emergency Batteries equipment (#7) and Emergency Drop
+        (#3.3). Reactivates the character card for each specified player.
+
+        Args:
+            player_indices: Indices of players whose character cards
+                should be reactivated.
+
+        Raises:
+            ValueError: If a player has no character card.
+        """
+        for p_idx in player_indices:
+            card = self.players[p_idx].character_card
+            if card is None:
+                raise ValueError(
+                    f"Player {p_idx} has no character card"
+                )
+            card.used = False
+
+    def set_current_player(self, player_index: int) -> None:
+        """Change which player's turn it is.
+
+        Used by Coffee Mug equipment (#11).
+
+        Args:
+            player_index: Index of the new active player.
+
+        Raises:
+            ValueError: If the index is out of range.
+        """
+        if not (0 <= player_index < len(self.players)):
+            raise ValueError(
+                f"Player index must be 0-{len(self.players) - 1}, "
+                f"got {player_index}"
+            )
+        self.current_player_index = player_index
+
+    def add_must_have(
+        self,
+        player_index: int,
+        value: int | str,
+        source: str = "",
+    ) -> None:
+        """Add a MustHaveValue constraint for a player.
+
+        Used when General Radar (#8) gets a "yes" response: the player
+        has at least one uncut wire of this value.
+
+        Args:
+            player_index: The player this constraint applies to.
+            value: The gameplay value (int 1-12 or 'YELLOW').
+            source: Optional description of how this was determined.
+        """
+        self.slot_constraints.append(
+            MustHaveValue(
+                player_index=player_index,
+                value=value,
+                source=source,
+            )
+        )
+
+    def add_must_not_have(
+        self,
+        player_index: int,
+        value: int | str,
+        source: str = "",
+    ) -> None:
+        """Add a MustNotHaveValue constraint for a player.
+
+        Used when General Radar (#8) gets a "no" response: the player
+        does NOT have any uncut wire of this value.
+
+        Args:
+            player_index: The player this constraint applies to.
+            value: The gameplay value (int 1-12 or 'YELLOW').
+            source: Optional description of how this was determined.
+        """
+        self.slot_constraints.append(
+            MustNotHaveValue(
+                player_index=player_index,
+                value=value,
+                source=source,
+            )
+        )
+
+    def add_adjacent_not_equal(
+        self,
+        player_index: int,
+        slot_left: int,
+        slot_right: int,
+    ) -> None:
+        """Add an AdjacentNotEqual constraint (Label != equipment #1).
+
+        The two slots must be adjacent (slot_right = slot_left + 1).
+
+        Args:
+            player_index: The player whose stand is constrained.
+            slot_left: Left slot index.
+            slot_right: Right slot index.
+
+        Raises:
+            ValueError: If slots are not adjacent or out of range.
+        """
+        stand = self.players[player_index].tile_stand
+        if slot_right != slot_left + 1:
+            raise ValueError(
+                f"Slots must be adjacent: got {slot_left} and {slot_right}"
+            )
+        if slot_left < 0 or slot_right >= len(stand.slots):
+            raise ValueError(
+                f"Slot indices out of range for stand with "
+                f"{len(stand.slots)} slots"
+            )
+        self.slot_constraints.append(
+            AdjacentNotEqual(
+                player_index=player_index,
+                slot_index_left=slot_left,
+                slot_index_right=slot_right,
+            )
+        )
+
+    def add_adjacent_equal(
+        self,
+        player_index: int,
+        slot_left: int,
+        slot_right: int,
+    ) -> None:
+        """Add an AdjacentEqual constraint (Label = equipment #12).
+
+        The two slots must be adjacent (slot_right = slot_left + 1).
+
+        Args:
+            player_index: The player whose stand is constrained.
+            slot_left: Left slot index.
+            slot_right: Right slot index.
+
+        Raises:
+            ValueError: If slots are not adjacent or out of range.
+        """
+        stand = self.players[player_index].tile_stand
+        if slot_right != slot_left + 1:
+            raise ValueError(
+                f"Slots must be adjacent: got {slot_left} and {slot_right}"
+            )
+        if slot_left < 0 or slot_right >= len(stand.slots):
+            raise ValueError(
+                f"Slot indices out of range for stand with "
+                f"{len(stand.slots)} slots"
+            )
+        self.slot_constraints.append(
+            AdjacentEqual(
+                player_index=player_index,
+                slot_index_left=slot_left,
+                slot_index_right=slot_right,
+            )
+        )
+
+    def cut_all_of_value(self, value: int | str) -> None:
+        """Cut all remaining uncut wires of a given value across all stands.
+
+        Used by Disintegrator equipment (#10.10). Marks all hidden wires
+        with the matching gameplay value as CUT.
+
+        Args:
+            value: The gameplay value to cut (int 1-12 or 'YELLOW').
+        """
+        for player in self.players:
+            for slot in player.tile_stand.slots:
+                if (
+                    slot.is_hidden
+                    and slot.wire is not None
+                    and slot.wire.gameplay_value == value
+                ):
+                    slot.state = SlotState.CUT
+        # Check validation tokens for blue wires
+        if isinstance(value, int):
+            self._check_validation(value)
+        self._check_win()
+
+    def apply_walkie_talkies(self, *args: object, **kwargs: object) -> None:
+        """Swap wires between two players (Walkie-Talkies, equipment #2).
+
+        Not yet implemented. Walkie-Talkies change tile stand composition
+        and require re-sorting, which touches many game invariants.
+        Workaround: enter the post-swap state via ``from_partial_state()``.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(
+            "Walkie-Talkies wire swapping is not yet implemented. "
+            "Enter the post-swap game state via from_partial_state() instead."
+        )
+
+    def apply_grappling_hook(self, *args: object, **kwargs: object) -> None:
+        """Take a teammate's wire (Grappling Hook, equipment #11.11).
+
+        Not yet implemented. Grappling Hook changes tile stand composition
+        and requires re-sorting, which touches many game invariants.
+        Workaround: enter the post-transfer state via ``from_partial_state()``.
+
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(
+            "Grappling Hook wire transfer is not yet implemented. "
+            "Enter the post-transfer game state via from_partial_state() "
+            "instead."
+        )
+
+    # -----------------------------------------------------------------
+    # Display
+    # -----------------------------------------------------------------
 
     def __str__(self) -> str:
         lines = [
@@ -2184,6 +2712,12 @@ class GameState:
             lines.append("Equipment:")
             for e in self.equipment:
                 lines.append(f"  {e}")
+
+        # Constraints
+        if self.slot_constraints:
+            lines.append("Constraints:")
+            for c in self.slot_constraints:
+                lines.append(f"  {c.describe()}")
 
         lines.append("")
 

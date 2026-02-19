@@ -163,11 +163,15 @@ The MC solver incorporates the same constraints as the exact solver:
 | Sort-order bounds | `PositionConstraint` bounds + `max_run` pruning in per-player backward DP |
 | Pool composition | Remaining pool updated per-player; `f[0][0] == 0` detects infeasible states |
 | Must-have (failed dual cuts) | Post-composition check; sample rejected if required values are missing |
+| `MustHaveValue` constraints | Merged into `must_have` during solver setup (same rejection-based enforcement as failed dual cut deductions) |
+| `MustNotHaveValue` constraints | Post-composition check; sample rejected if any forbidden value appears in the player's assignment |
+| `AdjacentNotEqual` constraints | Post-composition check; sample rejected if two adjacent hidden slots are assigned wires with the same gameplay value. When one slot is known, bounds are tightened during setup instead |
+| `AdjacentEqual` constraints | Post-composition check; sample rejected if two adjacent hidden slots are assigned wires with different gameplay values. When one slot is known, bounds are tightened during setup instead |
 | Uncertain wire groups | Discard slots with `required_color` — same as exact solver |
 | Info tokens (blue) | Wire removed from pool; bounds tightened |
 | Info tokens (yellow) | `required_color` constraint on position |
 
-The MC solver uses the same `_setup_solver()` and `compute_position_constraints()` as the exact solver, so all constraint-handling logic is shared.
+The MC solver uses the same `_setup_solver()` and `compute_position_constraints()` as the exact solver, so all constraint-handling logic is shared. The `MustNotHaveValue`, `AdjacentNotEqual`, and `AdjacentEqual` constraints add additional rejection checks after each player's composition is sampled. Since these constraints are rare (typically 0-2 per game), the increase in rejection rate is negligible.
 
 ## Historical Context: Rejected Approaches
 

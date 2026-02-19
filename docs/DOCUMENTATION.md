@@ -180,6 +180,21 @@ When the game ends, a status line appears at the bottom:
 
 **`UncertainWireGroup`** — Represents colored wire candidates with uncertain inclusion from X-of-Y setup. Holds `candidates` (all drawn wires) and `count_in_play` (how many were kept). Factory methods: `yellow(numbers, count)`, `red(numbers, count)`. Auto-derived internally by `from_partial_state` from the `yellow_wires` and `red_wires` tuple parameters.
 
+### Slot Constraints
+
+Constraint classes encode information from equipment cards (Label !=, Label =, General Radar) and other game effects that restrict which wires can occupy which positions. All are frozen dataclasses subclassing `SlotConstraint`.
+
+| Constraint | Description | Source |
+|-----------|-------------|--------|
+| `AdjacentNotEqual` | Two adjacent slots must have different gameplay values | Label != (#1) |
+| `AdjacentEqual` | Two adjacent slots must have the same gameplay value | Label = (#12) |
+| `MustHaveValue` | Player must have at least one uncut wire of a specific value | General Radar "yes" (#8), failed dual cuts |
+| `MustNotHaveValue` | Player must NOT have any uncut wire of a specific value | General Radar "no" (#8) |
+
+Future constraint stubs (defined but not yet enforced by the solver): `SlotParity` (even/odd tokens), `ValueMultiplicity` (x1/x2/x3 tokens), `UnsortedSlot` (X tokens).
+
+Constraints are stored on `GameState.slot_constraints` and added via convenience methods: `add_adjacent_equal()`, `add_adjacent_not_equal()`, `add_must_have()`, `add_must_not_have()`. The solver (`compute_probabilities.py`) enforces `AdjacentNotEqual`, `AdjacentEqual`, `MustHaveValue`, and `MustNotHaveValue` constraints during both exact and Monte Carlo solving.
+
 ### Action Records
 
 **`DualCutAction`** — Records actor, target, guessed value, result, and Double Detector details.
@@ -195,6 +210,23 @@ When the game ends, a status line appears at the bottom:
 The central class managing the full game. Two factory methods are provided: `create_game()` for full simulation mode and `from_partial_state()` for calculator/mid-game mode. See [Creating a GameState](#creating-a-gamestate) for detailed usage and examples.
 
 Action execution methods: `execute_dual_cut()`, `execute_solo_cut()`, `execute_reveal_red()`. Each validates the action, resolves outcomes, updates the detonator, places info tokens, checks validation tokens, and records to history.
+
+Equipment-supporting methods (named for actions, not equipment — reusable across game effects):
+
+| Method | Description | Equipment |
+|--------|-------------|-----------|
+| `place_info_token(player_index, slot_index)` | Mark hidden blue wire as INFO_REVEALED | Post-It (#4) |
+| `adjust_detonator(delta)` | Change detonator failures by delta (negative = rewind) | Rewinder (#6) |
+| `set_detonator(mistakes_remaining)` | Set detonator to specific value | — |
+| `reactivate_character_cards(player_indices)` | Reset character cards to available | Emergency Batteries (#7) |
+| `set_current_player(player_index)` | Change active player | Coffee Mug (#11) |
+| `cut_all_of_value(value)` | Cut all remaining wires of a value | Disintegrator (#10.10) |
+| `add_must_have(player_index, value)` | Add MustHaveValue constraint | General Radar "yes" (#8) |
+| `add_must_not_have(player_index, value)` | Add MustNotHaveValue constraint | General Radar "no" (#8) |
+| `add_adjacent_equal(player_index, slot_left, slot_right)` | Add AdjacentEqual constraint | Label = (#12) |
+| `add_adjacent_not_equal(player_index, slot_left, slot_right)` | Add AdjacentNotEqual constraint | Label != (#1) |
+
+Solo cut methods accept `fast_pass: bool = False` parameter. When True, skips the "all remaining must be in hand" check (Fast Pass #9.9).
 
 ---
 
@@ -483,19 +515,28 @@ The exact solver becomes intractable for early-game states with many hidden posi
 | Function | Description |
 |----------|-------------|
 | `probability_of_dual_cut(game, active_player, target_player, target_slot, value)` | Probability that a specific dual cut succeeds (0.0 to 1.0) |
-| `probability_of_double_detector(game, active_player, target_player, slot1, slot2, value)` | Joint probability for Double Detector (not naive independence) |
+| `probability_of_double_detector(game, active_player, target_player, slot1, slot2, value)` | Joint probability for Double Detector (2 slots, not naive independence) |
+| `probability_of_triple_detector(game, active_player, target_player, s1, s2, s3, value)` | Joint probability for Triple Detector (3 slots) |
+| `probability_of_super_detector(game, active_player, target_player, value)` | Joint probability for Super Detector (all hidden slots) |
+| `probability_of_x_or_y_ray(game, active_player, target_player, slot, value1, value2)` | P(slot matches value1 or value2) — uses marginals (mutually exclusive) |
 | `probability_of_red_wire(game, active_player, target_player, target_slot, probs)` | Probability that a specific slot contains a red wire (0.0 to 1.0) |
 | `probability_of_red_wire_dd(game, active_player, target_player, slot1, slot2)` | Joint probability that both DD target slots are red (instant game-over) |
-| `guaranteed_actions(game, active_player)` | Find all 100% success actions (solo cuts, guaranteed dual cuts, reveal red) |
-| `rank_all_moves(game, active_player, include_dd, mc_samples)` | Rank all possible moves by probability, sorted descending |
-| `print_probability_analysis(game, active_player, max_moves, include_dd)` | Print a colored terminal report with guaranteed actions and ranked moves |
-| `monte_carlo_analysis(game, active_player, num_samples)` | MC sampling returning both marginal probs and raw `MCSamples` for DD |
+| `probability_of_red_wire_multi(game, active_player, target_player, slots)` | Joint probability that all specified slots are red |
+| `guaranteed_actions(game, active_player, include_equipment)` | Find all 100% success actions (solo cuts, fast pass solo cuts, guaranteed dual cuts, reveal red) |
+| `rank_all_moves(game, active_player, include_equipment, mc_samples)` | Rank all possible moves by probability, sorted descending |
+| `print_probability_analysis(game, active_player, max_moves, include_equipment)` | Print a colored terminal report with guaranteed actions and ranked moves |
+| `monte_carlo_analysis(game, active_player, num_samples)` | MC sampling returning both marginal probs and raw `MCSamples` for joint queries |
 | `mc_dd_probability(mc_samples, target_player, slot1, slot2, value)` | Double Detector probability from MC samples |
+| `mc_td_probability(mc_samples, target_player, s1, s2, s3, value)` | Triple Detector probability from MC samples |
+| `mc_sd_probability(mc_samples, target_player, slots, value)` | Super Detector probability from MC samples |
 | `mc_red_dd_probability(mc_samples, target_player, slot1, slot2)` | Joint red-wire probability for DD from MC samples |
+| `mc_red_multi_probability(mc_samples, target_player, slots)` | Joint red-wire probability for any slot set from MC samples |
 
-All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state. `rank_all_moves` also accepts `mc_samples` for DD computation in Monte Carlo mode.
+All high-level functions accept optional `ctx`/`memo` parameters to reuse a prebuilt solver, avoiding redundant computation when calling multiple functions on the same game state. `rank_all_moves` also accepts `mc_samples` for joint probability computation in Monte Carlo mode.
 
-**`RankedMove`** — Dataclass for ranked results with `action_type`, target details, `guessed_value`, `probability`, and `red_probability` (risk of hitting a red wire).
+**`EquipmentType`** — Enum of equipment types that affect probability calculations: `DOUBLE_DETECTOR`, `TRIPLE_DETECTOR`, `SUPER_DETECTOR`, `X_OR_Y_RAY`, `FAST_PASS`. Used with `include_equipment` parameter on `rank_all_moves`, `guaranteed_actions`, and `print_probability_analysis`.
+
+**`RankedMove`** — Dataclass for ranked results with `action_type` (one of `"dual_cut"`, `"solo_cut"`, `"reveal_red"`, `"double_detector"`, `"triple_detector"`, `"super_detector"`, `"x_or_y_ray"`, `"fast_pass_solo"`), target details, `guessed_value`, `second_value` (for X or Y Ray), `third_slot` (for Triple Detector), `probability`, and `red_probability` (risk of hitting a red wire).
 
 ### Indication Quality Analysis
 

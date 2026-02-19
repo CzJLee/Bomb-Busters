@@ -4,26 +4,33 @@ The exact solver computes precise probability distributions for every hidden wir
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Problem Formulation](#problem-formulation)
-- [Algorithm Architecture](#algorithm-architecture)
-  - [Knowledge Extraction](#knowledge-extraction)
-  - [Unknown Pool Computation](#unknown-pool-computation)
-  - [Position Constraints](#position-constraints)
-  - [Solver Context Setup](#solver-context-setup)
-  - [Backward Solve (Memo Builder)](#backward-solve-memo-builder)
-  - [Forward Passes](#forward-passes)
-- [Key Optimizations](#key-optimizations)
-  - [Composition-Based Enumeration](#composition-based-enumeration)
-  - [Combinatorial Weights](#combinatorial-weights)
-  - [Memoization at Player Boundaries](#memoization-at-player-boundaries)
-  - [Max-Run Pruning](#max-run-pruning)
-  - [Player Ordering](#player-ordering)
-  - [Build Once, Query Many](#build-once-query-many)
-- [Uncertain (X of Y) Wire Groups](#uncertain-x-of-y-wire-groups)
-- [Constraints and Deductions](#constraints-and-deductions)
-- [Limitations](#limitations)
-- [Ideas for Further Optimization](#ideas-for-further-optimization)
+- [Exact Constraint Solver](#exact-constraint-solver)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Problem Formulation](#problem-formulation)
+  - [Algorithm Architecture](#algorithm-architecture)
+    - [Knowledge Extraction](#knowledge-extraction)
+    - [Unknown Pool Computation](#unknown-pool-computation)
+    - [Position Constraints](#position-constraints)
+    - [Solver Context Setup](#solver-context-setup)
+    - [Backward Solve (Memo Builder)](#backward-solve-memo-builder)
+    - [Forward Passes](#forward-passes)
+  - [Key Optimizations](#key-optimizations)
+    - [Composition-Based Enumeration](#composition-based-enumeration)
+    - [Combinatorial Weights](#combinatorial-weights)
+    - [Memoization at Player Boundaries](#memoization-at-player-boundaries)
+    - [Max-Run Pruning](#max-run-pruning)
+    - [Player Ordering](#player-ordering)
+    - [Build Once, Query Many](#build-once-query-many)
+  - [Uncertain (X of Y) Wire Groups](#uncertain-x-of-y-wire-groups)
+  - [Constraints and Deductions](#constraints-and-deductions)
+  - [Limitations](#limitations)
+  - [Ideas for Further Optimization](#ideas-for-further-optimization)
+    - [Symmetry Reduction](#symmetry-reduction)
+    - [Incremental Updates](#incremental-updates)
+    - [Tighter Bound Propagation](#tighter-bound-propagation)
+    - [Parallel Composition Enumeration](#parallel-composition-enumeration)
+    - [Profile-Guided Wire Type Ordering](#profile-guided-wire-type-ordering)
 
 ## Overview
 
@@ -82,8 +89,7 @@ For blue info-revealed wires, the identity is reconstructed from the numeric inf
 - `lower_bound`, `upper_bound`: The valid `sort_value` range for a wire at this position, derived from scanning left and right for the nearest publicly visible wire (CUT or INFO_REVEALED with known identity).
 - `required_color`: For yellow info-revealed slots in calculator mode (where the wire is None but we know it's yellow), this restricts the position to only yellow wires.
 
-Sort-value bounds use only publicly visible information. Hidden wires on other players' stands are never used for bounds computation — this was the subject of a critical bug fix where hidden wire identities were leaking into bounds, causing incorrect probability calculations.
-
+Sort-value bounds use only publicly visible information. Hidden wires on other players' stands are never used for bounds computation.
 ### Solver Context Setup
 
 `_setup_solver()` assembles the complete solver context:
@@ -192,6 +198,10 @@ The solver incorporates the following information:
 | Validation tokens | Implicitly handled — wires of validated values are all cut, so removed from pool |
 | Sort order | `PositionConstraint` bounds from nearest known neighbors |
 | Failed dual cuts | `must_have` constraints — compositions must include the required values for that player |
+| `MustHaveValue` constraints | Merged into `must_have` during solver setup (same enforcement as failed dual cut deductions) |
+| `MustNotHaveValue` constraints | Post-composition check — if any forbidden value appears in the player's assignment, the composition is pruned |
+| `AdjacentNotEqual` constraints | Post-composition check — if two adjacent hidden slots are assigned wires with the same gameplay value, the composition is pruned. When one slot is known (CUT/INFO_REVEALED), the constraint tightens the hidden slot's `PositionConstraint` bounds during setup |
+| `AdjacentEqual` constraints | Post-composition check — if two adjacent hidden slots are assigned wires with different gameplay values, the composition is pruned. When one slot is known, same bounds-tightening as above |
 
 **What the solver does NOT explicitly deduce:**
 

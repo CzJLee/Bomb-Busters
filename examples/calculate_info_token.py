@@ -28,11 +28,11 @@ def main() -> None:
     # ── Tile stands ────────────────────────────────────────────
     player_names = ["Alice", "Bob", "Charlie", "Diana", "Eve"]
     # Captain (P0) — your stand, all wires known. Use ?N for hidden.
-    captain = bomb_busters.TileStand.from_string("?1 ?2 ?4 ?5 ?6 ?7 ?8 ?9 ?10 ?12")
+    captain = bomb_busters.TileStand.from_string("?2 ?3 ?4 ?8 ?8 ?10 ?10 ?11 ?11 ?12")
     p1 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
-    p2 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
-    p3 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
-    p4 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+    p2 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+    p3 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+    p4 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
     # ── Create game state ──────────────────────────────────────
     game = bomb_busters.GameState.from_partial_state(
@@ -41,8 +41,8 @@ def main() -> None:
         active_player_index=0,
         captain=0,
         # blue_wires=None,       # default: all blue 1-12 (48 wires)
-        # yellow_wires=[4, 7],   # uncomment for known yellow wires
-        # red_wires=[4],         # uncomment for known red wires
+        yellow_wires=None,   # uncomment for known yellow wires
+        red_wires=([1, 10, 11], 1),         # uncomment for known red wires
     )
 
     # ── Display & analysis ─────────────────────────────────────

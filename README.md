@@ -11,7 +11,7 @@ Bomb Busters is a co-op game for 4-5 players where each player has a tile stand 
 - **Dual cut probability** — "What is the % chance this wire is a 5?"
 - **Guaranteed actions** — solo cuts, dual cuts, and reveals that are 100% certain to succeed.
 - **Best move ranking** — all possible moves ranked by probability of success.
-- **Double Detector probability** — joint probability for the two-slot character ability.
+- **Equipment support** — multi-slot detectors (Double, Triple, Super), X or Y Ray, Fast Pass solo cuts, constraint-based equipment (Label =, Label !=, General Radar), and game state modifications (Post-It, Rewinder, Coffee Mug, Emergency Batteries, Disintegrator).
 - **Red wire risk** — probability a target slot contains a red wire (instant game-over).
 - **Indication quality** — which wire to indicate at game start for maximum information gain.
 
@@ -22,8 +22,8 @@ import bomb_busters
 import compute_probabilities
 
 # Enter a mid-game state from your perspective (player 0)
-alice   = bomb_busters.TileStand.from_string("?2 3 ?5 ?7 ?9")       # your hand
-bob     = bomb_busters.TileStand.from_string("? 4 ? i8 ?")          # partial knowledge
+alice   = bomb_busters.TileStand.from_string("?1 ?1 ?2 ?3 ?5 ?7 ?8 ?9 ?11 ?11")       # your hand
+bob     = bomb_busters.TileStand.from_string("2 ? 4 ? ? ? i8 ? ? ?")          # partial knowledge
 charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")   # all unknown
 diana   = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
 eve     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
@@ -31,7 +31,6 @@ eve     = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
 game = bomb_busters.GameState.from_partial_state(
     player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
     stands=[alice, bob, charlie, diana, eve],
-    mistakes_remaining=3,
 )
 
 # Print ranked moves with probabilities
@@ -56,23 +55,8 @@ compute_probabilities.print_probability_analysis(game, active_player_index=0)
 ```
 bomb_busters.py              # Game model: enums, dataclasses, game state, actions
 compute_probabilities.py     # Probability engine: constraint solver and API
-simulate.py                  # Example mid-game probability analysis
-simulate_info_token.py       # Example indication phase simulation
-simulate_game.py             # Full mission simulation (indication + cutting phases)
+examples/                    # Example use cases and simulated games
 docs/                        # Documentation (see table above)
 tests/                       # Unit tests (unittest)
 web/                         # Future: browser-based UI
-```
-
-## Environment Setup
-
-Requires Python 3.14. No external dependencies (stdlib only).
-
-```bash
-# Using pyenv
-pyenv virtualenv 3.14.0a3 bomb-busters
-pyenv activate bomb-busters
-
-# Run tests
-python -m unittest discover tests/
 ```

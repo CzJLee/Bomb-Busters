@@ -2163,5 +2163,620 @@ class TestCaptainIndex(unittest.TestCase):
                 self.assertNotIn("\U0001f451", line)
 
 
+class TestSlotConstraints(unittest.TestCase):
+    """Tests for constraint class hierarchy."""
+
+    def test_adjacent_not_equal_construction(self) -> None:
+        c = bomb_busters.AdjacentNotEqual(
+            player_index=1, slot_index_left=2, slot_index_right=3,
+        )
+        self.assertEqual(c.player_index, 1)
+        self.assertEqual(c.slot_index_left, 2)
+        self.assertEqual(c.slot_index_right, 3)
+
+    def test_adjacent_equal_construction(self) -> None:
+        c = bomb_busters.AdjacentEqual(
+            player_index=0, slot_index_left=4, slot_index_right=5,
+        )
+        self.assertEqual(c.player_index, 0)
+        self.assertEqual(c.slot_index_left, 4)
+
+    def test_must_have_value_construction(self) -> None:
+        c = bomb_busters.MustHaveValue(
+            player_index=2, value=7, source="General Radar",
+        )
+        self.assertEqual(c.value, 7)
+        self.assertEqual(c.source, "General Radar")
+
+    def test_must_have_value_default_source(self) -> None:
+        c = bomb_busters.MustHaveValue(player_index=0, value=3)
+        self.assertEqual(c.source, "")
+
+    def test_must_not_have_value_construction(self) -> None:
+        c = bomb_busters.MustNotHaveValue(
+            player_index=1, value="YELLOW", source="General Radar",
+        )
+        self.assertEqual(c.value, "YELLOW")
+
+    def test_slot_parity_construction(self) -> None:
+        c = bomb_busters.SlotParity(
+            player_index=0, slot_index=3, parity=bomb_busters.Parity.EVEN,
+        )
+        self.assertEqual(c.parity, bomb_busters.Parity.EVEN)
+
+    def test_value_multiplicity_construction(self) -> None:
+        c = bomb_busters.ValueMultiplicity(
+            player_index=0, slot_index=2,
+            multiplicity=bomb_busters.Multiplicity.DOUBLE,
+        )
+        self.assertEqual(c.multiplicity, bomb_busters.Multiplicity.DOUBLE)
+        self.assertEqual(c.multiplicity.value, 2)
+
+    def test_unsorted_slot_construction(self) -> None:
+        c = bomb_busters.UnsortedSlot(player_index=1, slot_index=5)
+        self.assertEqual(c.slot_index, 5)
+
+    def test_constraints_are_frozen(self) -> None:
+        c = bomb_busters.AdjacentNotEqual(
+            player_index=0, slot_index_left=0, slot_index_right=1,
+        )
+        with self.assertRaises(AttributeError):
+            c.player_index = 1  # type: ignore[misc]
+
+    def test_constraints_are_hashable(self) -> None:
+        c1 = bomb_busters.MustHaveValue(player_index=0, value=5)
+        c2 = bomb_busters.MustHaveValue(player_index=0, value=5)
+        self.assertEqual(hash(c1), hash(c2))
+        self.assertEqual(c1, c2)
+        s = {c1, c2}
+        self.assertEqual(len(s), 1)
+
+    def test_base_class_describe_raises(self) -> None:
+        c = bomb_busters.SlotConstraint(player_index=0)
+        with self.assertRaises(NotImplementedError):
+            c.describe()
+
+    def test_adjacent_not_equal_describe(self) -> None:
+        c = bomb_busters.AdjacentNotEqual(
+            player_index=1, slot_index_left=0, slot_index_right=1,
+        )
+        desc = c.describe()
+        self.assertIn("!=", desc)
+        self.assertIn("A", desc)
+        self.assertIn("B", desc)
+
+    def test_adjacent_equal_describe(self) -> None:
+        c = bomb_busters.AdjacentEqual(
+            player_index=0, slot_index_left=2, slot_index_right=3,
+        )
+        desc = c.describe()
+        self.assertIn("=", desc)
+        self.assertIn("C", desc)
+        self.assertIn("D", desc)
+
+    def test_must_have_describe(self) -> None:
+        c = bomb_busters.MustHaveValue(
+            player_index=2, value=7, source="General Radar",
+        )
+        desc = c.describe()
+        self.assertIn("has 7", desc)
+        self.assertIn("General Radar", desc)
+
+    def test_must_not_have_describe(self) -> None:
+        c = bomb_busters.MustNotHaveValue(player_index=1, value=3)
+        desc = c.describe()
+        self.assertIn("does not have 3", desc)
+
+    def test_slot_parity_describe(self) -> None:
+        c = bomb_busters.SlotParity(
+            player_index=0, slot_index=0, parity=bomb_busters.Parity.ODD,
+        )
+        self.assertIn("odd", c.describe())
+
+    def test_value_multiplicity_describe(self) -> None:
+        c = bomb_busters.ValueMultiplicity(
+            player_index=0, slot_index=1,
+            multiplicity=bomb_busters.Multiplicity.TRIPLE,
+        )
+        self.assertIn("x3", c.describe())
+
+    def test_unsorted_slot_describe(self) -> None:
+        c = bomb_busters.UnsortedSlot(player_index=0, slot_index=4)
+        self.assertIn("unsorted", c.describe())
+
+    def test_parity_enum_values(self) -> None:
+        self.assertEqual(len(bomb_busters.Parity), 2)
+        self.assertIn(bomb_busters.Parity.EVEN, bomb_busters.Parity)
+        self.assertIn(bomb_busters.Parity.ODD, bomb_busters.Parity)
+
+    def test_multiplicity_enum_values(self) -> None:
+        self.assertEqual(bomb_busters.Multiplicity.SINGLE.value, 1)
+        self.assertEqual(bomb_busters.Multiplicity.DOUBLE.value, 2)
+        self.assertEqual(bomb_busters.Multiplicity.TRIPLE.value, 3)
+
+
+class TestGameStateConstraints(unittest.TestCase):
+    """Tests for GameState constraint management."""
+
+    def _make_game(
+        self,
+        constraints: list[bomb_busters.SlotConstraint] | None = None,
+    ) -> bomb_busters.GameState:
+        """Create a minimal 4-player game for constraint testing."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+        ]
+        return bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 5),
+            constraints=constraints,
+        )
+
+    def test_add_constraint(self) -> None:
+        game = self._make_game()
+        self.assertEqual(len(game.slot_constraints), 0)
+        c = bomb_busters.MustHaveValue(player_index=1, value=3)
+        game.add_constraint(c)
+        self.assertEqual(len(game.slot_constraints), 1)
+        self.assertIs(game.slot_constraints[0], c)
+
+    def test_get_constraints_for_player(self) -> None:
+        c1 = bomb_busters.MustHaveValue(player_index=1, value=3)
+        c2 = bomb_busters.MustNotHaveValue(player_index=2, value=5)
+        c3 = bomb_busters.AdjacentNotEqual(
+            player_index=1, slot_index_left=0, slot_index_right=1,
+        )
+        game = self._make_game(constraints=[c1, c2, c3])
+        p1 = game.get_constraints_for_player(1)
+        self.assertEqual(len(p1), 2)
+        self.assertIn(c1, p1)
+        self.assertIn(c3, p1)
+        p2 = game.get_constraints_for_player(2)
+        self.assertEqual(len(p2), 1)
+        self.assertIn(c2, p2)
+        p0 = game.get_constraints_for_player(0)
+        self.assertEqual(len(p0), 0)
+
+    def test_from_partial_state_with_constraints(self) -> None:
+        constraints = [
+            bomb_busters.MustHaveValue(player_index=1, value=3),
+            bomb_busters.AdjacentEqual(
+                player_index=2, slot_index_left=0, slot_index_right=1,
+            ),
+        ]
+        game = self._make_game(constraints=constraints)
+        self.assertEqual(len(game.slot_constraints), 2)
+
+    def test_from_partial_state_no_constraints(self) -> None:
+        game = self._make_game()
+        self.assertEqual(game.slot_constraints, [])
+
+    def test_constraints_in_str_output(self) -> None:
+        c = bomb_busters.MustHaveValue(
+            player_index=1, value=3, source="Radar",
+        )
+        game = self._make_game(constraints=[c])
+        output = str(game)
+        self.assertIn("Constraints:", output)
+        self.assertIn("has 3", output)
+
+    def test_no_constraints_section_when_empty(self) -> None:
+        game = self._make_game()
+        output = str(game)
+        self.assertNotIn("Constraints:", output)
+
+
+class TestPlaceInfoToken(unittest.TestCase):
+    """Tests for GameState.place_info_token()."""
+
+    def test_place_info_token_on_hidden_blue(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        # Find a hidden blue wire on player 0
+        slot = game.players[0].tile_stand.slots[0]
+        self.assertTrue(slot.is_hidden)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.BLUE)
+        game.place_info_token(0, 0)
+        self.assertTrue(slot.is_info_revealed)
+        self.assertEqual(slot.info_token, slot.wire.gameplay_value)
+
+    def test_place_info_token_on_cut_slot_raises(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.players[0].tile_stand.cut_wire_at(0)
+        with self.assertRaises(ValueError):
+            game.place_info_token(0, 0)
+
+    def test_place_info_token_on_unknown_wire_raises(self) -> None:
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?2 ?3"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 3),
+        )
+        # Player 1 slot 0 is unknown (wire=None)
+        with self.assertRaises(ValueError):
+            game.place_info_token(1, 0)
+
+    def test_place_info_token_on_non_blue_raises(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+            yellow_wires=2,
+        )
+        # Find a yellow wire
+        for p_idx, player in enumerate(game.players):
+            for s_idx, slot in enumerate(player.tile_stand.slots):
+                if (
+                    slot.is_hidden
+                    and slot.wire is not None
+                    and slot.wire.color == bomb_busters.WireColor.YELLOW
+                ):
+                    with self.assertRaises(ValueError):
+                        game.place_info_token(p_idx, s_idx)
+                    return
+        self.skipTest("No yellow wire found on any stand")
+
+
+class TestAdjustDetonator(unittest.TestCase):
+    """Tests for GameState.adjust_detonator()."""
+
+    def test_advance_detonator(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        initial = game.detonator.remaining_failures
+        game.adjust_detonator(1)
+        self.assertEqual(game.detonator.remaining_failures, initial - 1)
+
+    def test_rewind_detonator(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.adjust_detonator(2)  # advance by 2
+        remaining_after = game.detonator.remaining_failures
+        game.adjust_detonator(-1)  # rewind by 1
+        self.assertEqual(
+            game.detonator.remaining_failures, remaining_after + 1,
+        )
+
+    def test_clamps_to_zero(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.adjust_detonator(-100)
+        self.assertEqual(game.detonator.failures, 0)
+        self.assertEqual(
+            game.detonator.remaining_failures,
+            game.detonator.max_failures,
+        )
+
+    def test_clamps_to_max(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.adjust_detonator(100)
+        self.assertEqual(
+            game.detonator.failures, game.detonator.max_failures,
+        )
+
+
+class TestSetDetonator(unittest.TestCase):
+    """Tests for GameState.set_detonator()."""
+
+    def test_set_detonator(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.set_detonator(1)
+        self.assertEqual(game.detonator.remaining_failures, 1)
+
+    def test_set_detonator_zero(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.set_detonator(0)
+        self.assertEqual(game.detonator.remaining_failures, 0)
+
+    def test_set_detonator_out_of_range(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        with self.assertRaises(ValueError):
+            game.set_detonator(100)
+        with self.assertRaises(ValueError):
+            game.set_detonator(-1)
+
+
+class TestReactivateCharacterCards(unittest.TestCase):
+    """Tests for GameState.reactivate_character_cards()."""
+
+    def test_reactivate_used_card(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.players[0].character_card.use()
+        self.assertTrue(game.players[0].character_card.used)
+        game.reactivate_character_cards([0])
+        self.assertFalse(game.players[0].character_card.used)
+
+    def test_reactivate_multiple(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.players[0].character_card.use()
+        game.players[2].character_card.use()
+        game.reactivate_character_cards([0, 2])
+        self.assertFalse(game.players[0].character_card.used)
+        self.assertFalse(game.players[2].character_card.used)
+
+    def test_reactivate_no_card_raises(self) -> None:
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?2 ?3"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 3),
+        )
+        with self.assertRaises(ValueError):
+            game.reactivate_character_cards([0])
+
+
+class TestSetCurrentPlayer(unittest.TestCase):
+    """Tests for GameState.set_current_player()."""
+
+    def test_set_current_player(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        self.assertEqual(game.current_player_index, 0)
+        game.set_current_player(2)
+        self.assertEqual(game.current_player_index, 2)
+
+    def test_set_current_player_out_of_range(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        with self.assertRaises(ValueError):
+            game.set_current_player(4)
+        with self.assertRaises(ValueError):
+            game.set_current_player(-1)
+
+
+class TestAddMustHave(unittest.TestCase):
+    """Tests for GameState.add_must_have()."""
+
+    def test_add_must_have(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.add_must_have(1, 5, source="General Radar")
+        self.assertEqual(len(game.slot_constraints), 1)
+        c = game.slot_constraints[0]
+        self.assertIsInstance(c, bomb_busters.MustHaveValue)
+        self.assertEqual(c.player_index, 1)
+        self.assertEqual(c.value, 5)
+        self.assertEqual(c.source, "General Radar")
+
+
+class TestAddMustNotHave(unittest.TestCase):
+    """Tests for GameState.add_must_not_have()."""
+
+    def test_add_must_not_have(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.add_must_not_have(2, 8, source="General Radar")
+        self.assertEqual(len(game.slot_constraints), 1)
+        c = game.slot_constraints[0]
+        self.assertIsInstance(c, bomb_busters.MustNotHaveValue)
+        self.assertEqual(c.player_index, 2)
+        self.assertEqual(c.value, 8)
+
+
+class TestAddAdjacentConstraints(unittest.TestCase):
+    """Tests for add_adjacent_not_equal and add_adjacent_equal."""
+
+    def _make_game(self) -> bomb_busters.GameState:
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+        ]
+        return bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 5),
+        )
+
+    def test_add_adjacent_not_equal(self) -> None:
+        game = self._make_game()
+        game.add_adjacent_not_equal(1, 2, 3)
+        self.assertEqual(len(game.slot_constraints), 1)
+        c = game.slot_constraints[0]
+        self.assertIsInstance(c, bomb_busters.AdjacentNotEqual)
+        self.assertEqual(c.slot_index_left, 2)
+        self.assertEqual(c.slot_index_right, 3)
+
+    def test_add_adjacent_equal(self) -> None:
+        game = self._make_game()
+        game.add_adjacent_equal(1, 0, 1)
+        c = game.slot_constraints[0]
+        self.assertIsInstance(c, bomb_busters.AdjacentEqual)
+
+    def test_non_adjacent_raises(self) -> None:
+        game = self._make_game()
+        with self.assertRaises(ValueError):
+            game.add_adjacent_not_equal(1, 0, 2)
+        with self.assertRaises(ValueError):
+            game.add_adjacent_equal(1, 0, 3)
+
+    def test_out_of_range_raises(self) -> None:
+        game = self._make_game()
+        with self.assertRaises(ValueError):
+            game.add_adjacent_not_equal(1, -1, 0)
+        with self.assertRaises(ValueError):
+            game.add_adjacent_equal(1, 4, 5)
+
+
+class TestCutAllOfValue(unittest.TestCase):
+    """Tests for GameState.cut_all_of_value()."""
+
+    def test_cut_all_of_value(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        # Count how many hidden wires of value 3 exist
+        hidden_3s = 0
+        for player in game.players:
+            for slot in player.tile_stand.slots:
+                if (
+                    slot.is_hidden
+                    and slot.wire is not None
+                    and slot.wire.gameplay_value == 3
+                ):
+                    hidden_3s += 1
+        self.assertEqual(hidden_3s, 4)
+
+        game.cut_all_of_value(3)
+
+        # All should be cut now
+        remaining_3s = 0
+        for player in game.players:
+            for slot in player.tile_stand.slots:
+                if (
+                    slot.is_hidden
+                    and slot.wire is not None
+                    and slot.wire.gameplay_value == 3
+                ):
+                    remaining_3s += 1
+        self.assertEqual(remaining_3s, 0)
+
+    def test_cut_all_triggers_validation(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        game.cut_all_of_value(7)
+        self.assertIn(7, game.validation_tokens)
+
+
+class TestFastPassSoloCut(unittest.TestCase):
+    """Tests for fast_pass parameter on can_solo_cut/available_solo_cuts."""
+
+    def test_fast_pass_allows_cut_without_all_wires(self) -> None:
+        """Fast Pass allows solo cut with 2 wires even if others exist."""
+        # Player 0 has two 3s but other 3s exist elsewhere
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?3 ?3 ?5 ?7"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 8),
+        )
+        # Normal solo cut should fail (other 3s elsewhere)
+        self.assertFalse(game.can_solo_cut(0, 3))
+        # Fast pass should succeed (has 2 matching hidden wires)
+        self.assertTrue(game.can_solo_cut(0, 3, fast_pass=True))
+
+    def test_fast_pass_needs_two_wires(self) -> None:
+        """Fast Pass still requires at least 2 hidden wires."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?3 ?5 ?7 ?9"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 10),
+        )
+        # Only one 3, can't solo cut even with fast pass
+        self.assertFalse(game.can_solo_cut(0, 3, fast_pass=True))
+
+    def test_available_solo_cuts_fast_pass(self) -> None:
+        """available_solo_cuts with fast_pass returns more values."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?3 ?3 ?5 ?5"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+            bomb_busters.TileStand.from_string("? ? ? ? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 8),
+        )
+        normal = game.available_solo_cuts(0)
+        fast = game.available_solo_cuts(0, fast_pass=True)
+        # Fast pass should include 3 and 5 (both have 2 hidden)
+        self.assertIn(3, fast)
+        self.assertIn(5, fast)
+        # Normal should not (other copies exist elsewhere)
+        self.assertNotIn(3, normal)
+        self.assertNotIn(5, normal)
+
+
+class TestWalkieTalkiesStub(unittest.TestCase):
+    """Tests for apply_walkie_talkies stub."""
+
+    def test_raises_not_implemented(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        with self.assertRaises(NotImplementedError):
+            game.apply_walkie_talkies()
+
+
+class TestGrapplingHookStub(unittest.TestCase):
+    """Tests for apply_grappling_hook stub."""
+
+    def test_raises_not_implemented(self) -> None:
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D"],
+            seed=42,
+        )
+        with self.assertRaises(NotImplementedError):
+            game.apply_grappling_hook()
+
+
 if __name__ == "__main__":
     unittest.main()
