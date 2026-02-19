@@ -385,6 +385,7 @@ def main() -> None:
                 compute_probabilities.monte_carlo_analysis(
                     game, player_index,
                     num_samples=mc_num_samples,
+                    show_progress=True,
                 )
             )
             moves = compute_probabilities.rank_all_moves(

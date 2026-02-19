@@ -839,6 +839,7 @@ def _guided_mc_sample(
     num_samples: int = 1_000,
     seed: int | None = None,
     max_attempts: int | None = None,
+    show_progress: bool = False,
 ) -> tuple[
     dict[tuple[int, int], collections.Counter[bomb_busters.Wire]],
     MCSamples,
@@ -868,6 +869,8 @@ def _guided_mc_sample(
         max_attempts: Maximum total attempts (including must-have
             rejections) before stopping. Defaults to
             ``num_samples * 5``.
+        show_progress: If True, display a tqdm progress bar tracking
+            valid samples collected.
 
     Returns:
         A tuple of (aggregated_probs, mc_samples), or None if zero
@@ -901,6 +904,15 @@ def _guided_mc_sample(
     raw_samples: list[dict[tuple[int, int], bomb_busters.Wire]] = []
     raw_weights: list[int] = []
     valid_count = 0
+
+    pbar = None
+    if show_progress and _tqdm_module is not None:
+        pbar = _tqdm_module.tqdm(
+            total=num_samples,
+            desc="Sampling",
+            unit=" samples",
+            dynamic_ncols=True,
+        )
 
     for _ in range(max_attempts):
         if valid_count >= num_samples:
@@ -1011,6 +1023,8 @@ def _guided_mc_sample(
             continue
 
         valid_count += 1
+        if pbar is not None:
+            pbar.update(1)
 
         # Store raw per-sample assignments (excluding discard slots)
         sample_dict: dict[tuple[int, int], bomb_busters.Wire] = {}
@@ -1028,6 +1042,9 @@ def _guided_mc_sample(
                 result[key] = counter
             counter[wire] += sample_weight
 
+    if pbar is not None:
+        pbar.close()
+
     if valid_count == 0:
         return None
 
@@ -1040,6 +1057,7 @@ def monte_carlo_probabilities(
     num_samples: int = 1_000,
     seed: int | None = None,
     max_attempts: int | None = None,
+    show_progress: bool = False,
 ) -> dict[tuple[int, int], collections.Counter[bomb_busters.Wire]]:
     """Approximate position probabilities via backward-guided MC sampling.
 
@@ -1064,6 +1082,7 @@ def monte_carlo_probabilities(
         seed: Optional random seed for reproducibility.
         max_attempts: Maximum total attempts (including must-have
             rejections). Defaults to ``num_samples * 5``.
+        show_progress: If True, display a tqdm progress bar.
 
     Returns:
         Dict mapping (player_index, slot_index) to Counter of
@@ -1079,6 +1098,7 @@ def monte_carlo_probabilities(
         num_samples=num_samples,
         seed=seed,
         max_attempts=max_attempts if max_attempts is not None else None,
+        show_progress=show_progress,
     )
     return result[0] if result is not None else {}
 
@@ -1089,6 +1109,7 @@ def monte_carlo_analysis(
     num_samples: int = 1_000,
     seed: int | None = None,
     max_attempts: int | None = None,
+    show_progress: bool = False,
 ) -> tuple[
     dict[tuple[int, int], collections.Counter[bomb_busters.Wire]],
     MCSamples | None,
@@ -1107,6 +1128,7 @@ def monte_carlo_analysis(
         seed: Optional random seed for reproducibility.
         max_attempts: Maximum total attempts (including must-have
             rejections). Defaults to ``num_samples * 5``.
+        show_progress: If True, display a tqdm progress bar.
 
     Returns:
         A tuple of (marginal_probs, mc_samples). marginal_probs is
@@ -1123,6 +1145,7 @@ def monte_carlo_analysis(
         num_samples=num_samples,
         seed=seed,
         max_attempts=max_attempts if max_attempts is not None else None,
+        show_progress=show_progress,
     )
     if result is None:
         return {}, None
@@ -2590,7 +2613,7 @@ def print_probability_analysis(
     max_moves: int = 10,
     show_progress: bool = True,
     include_dd: bool = False,
-    mc_threshold: int | None = None,
+    mc_threshold: int = MC_POSITION_THRESHOLD,
     mc_num_samples: int = 10_000,
 ) -> None:
     """Print a probability analysis for the active player.
@@ -2607,14 +2630,11 @@ def print_probability_analysis(
             during the backward solve.
         include_dd: If True, include Double Detector moves in ranking.
         mc_threshold: Hidden position count above which Monte Carlo
-            is used instead of the exact solver. Defaults to
-            ``MC_POSITION_THRESHOLD``. Set to 0 to always use Monte
-            Carlo, or a very large number to always use the exact
-            solver.
+            is used instead of the exact solver. Set to 0 to always
+            use Monte Carlo, or a very large number to always use
+            the exact solver.
         mc_num_samples: Number of Monte Carlo samples when MC is used.
     """
-    if mc_threshold is None:
-        mc_threshold = MC_POSITION_THRESHOLD
     player = game.players[active_player_index]
     print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
     print(
@@ -2636,7 +2656,10 @@ def print_probability_analysis(
         probs, mc_samples_data = monte_carlo_analysis(
             game, active_player_index,
             num_samples=mc_num_samples,
+            show_progress=show_progress,
         )
+        if show_progress:
+            print()  # Extra spacing after progress bar
         print(
             f"  {_C.DIM}(Monte Carlo: {position_count} unknown wires,"
             f" {mc_num_samples:,} samples){_C.RESET}"
