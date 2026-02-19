@@ -78,7 +78,7 @@ class TestExtractKnownInfo(unittest.TestCase):
 
     def test_incomplete_active_player_stand_raises(self) -> None:
         """Raises ValueError when active player has unknown wires."""
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[
                 # Alice (active player) has unknown wires — incomplete
@@ -96,7 +96,7 @@ class TestExtractKnownInfo(unittest.TestCase):
 
     def test_incomplete_non_active_player_is_ok(self) -> None:
         """Other players can have unknown wires — that's expected."""
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[
                 # Alice knows her own wires
@@ -603,7 +603,7 @@ class TestCalculatorMode(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
         all_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 9)]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=all_wires,
@@ -1103,7 +1103,7 @@ class TestProbabilityOfRedWire(unittest.TestCase):
             # P3: one hidden
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -1186,7 +1186,7 @@ class TestProbabilityOfRedWire(unittest.TestCase):
             # P3: [HIDDEN]
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -1975,7 +1975,7 @@ class TestYellowInfoRevealed(unittest.TestCase):
             # P3: both hidden
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=(1, 8),
@@ -2030,7 +2030,7 @@ class TestYellowInfoRevealed(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=(1, 7),
@@ -2093,7 +2093,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2177,7 +2177,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2241,7 +2241,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2305,7 +2305,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2374,7 +2374,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2421,7 +2421,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2480,7 +2480,7 @@ class TestUncertainWireGroups(unittest.TestCase):
                 bomb_busters.Slot(wire=None),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -2533,7 +2533,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         p2 = bomb_busters.TileStand.from_string("? ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=(
@@ -2561,7 +2561,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         p2 = bomb_busters.TileStand.from_string("? ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=(
@@ -2585,7 +2585,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         p2 = bomb_busters.TileStand.from_string("? ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=(
@@ -2644,7 +2644,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
             + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 7.0)] * 2
             + [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)] * 2
         )
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=wires,
@@ -2689,7 +2689,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         p2 = bomb_busters.TileStand.from_string("? ?")
         p3 = bomb_busters.TileStand.from_string("? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=(
@@ -2726,7 +2726,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         p2 = bomb_busters.TileStand.from_string("? ?")
         p3 = bomb_busters.TileStand.from_string("? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
             blue_wires=(
@@ -2776,7 +2776,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
         )
@@ -2811,7 +2811,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
         )
@@ -2844,7 +2844,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
         )
@@ -2865,7 +2865,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
         )
@@ -2894,7 +2894,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
             yellow_wires=[4],
@@ -2927,11 +2927,11 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game_with = bomb_busters.GameState.from_partial_state(
+        game_with = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob_with_indication, charlie, diana, eve],
         )
-        game_without = bomb_busters.GameState.from_partial_state(
+        game_without = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob_without, charlie, diana, eve],
         )
@@ -2965,7 +2965,7 @@ class TestIndicationQuality(unittest.TestCase):
         charlie = bomb_busters.TileStand.from_string("? ? ? ?")
         diana = bomb_busters.TileStand.from_string("? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
             blue_wires=(1, 4),
@@ -2987,7 +2987,7 @@ class TestIndicationQuality(unittest.TestCase):
         charlie = bomb_busters.TileStand.from_string("? ?")
         diana = bomb_busters.TileStand.from_string("? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
             blue_wires=(1, 2),
@@ -3017,7 +3017,7 @@ class TestIndicationQuality(unittest.TestCase):
         charlie = bomb_busters.TileStand.from_string("? ? ? ?")
         diana = bomb_busters.TileStand.from_string("? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
             blue_wires=(1, 4),
@@ -3037,7 +3037,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
             red_wires=[7],
@@ -3060,7 +3060,7 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
         )
@@ -3281,7 +3281,7 @@ class TestMonteCarloSampling(unittest.TestCase):
         charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
         diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
 
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
             blue_wires=(1, 5),
@@ -3479,7 +3479,7 @@ class TestMonteCarloSampling(unittest.TestCase):
         # Yellow group: drew Y2, Y3, Y4; keeping 2 of 3.
         # Alice can see Y2 on her own stand (confirmed in game),
         # so 1 more yellow out of {Y3, Y4} is in play, 1 is discarded.
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
             blue_wires=(1, 3),
@@ -3544,7 +3544,7 @@ class TestSolverCombinatorialWeights(unittest.TestCase):
                 bomb_busters.Slot(
                     wire=None, state=bomb_busters.SlotState.HIDDEN),
             ]))
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 2),
@@ -3779,7 +3779,7 @@ class TestMCDoubleDetector(unittest.TestCase):
         stands = [
             bomb_busters.TileStand.from_wires(h) for h in hands
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=stands,
             blue_wires=blue_wires,
@@ -4359,7 +4359,7 @@ class TestConstraintCombinations(unittest.TestCase):
         constraints = [
             bomb_busters.MustNotHaveValue(player_index=1, value=2),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["P0", "P1", "P2", "P3"],
             stands=[
                 bomb_busters.TileStand.from_string("?1 ?2"),

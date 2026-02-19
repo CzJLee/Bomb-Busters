@@ -1713,6 +1713,7 @@ class GameState:
         yellow_wires: list[int] | tuple[list[int], int] | None = None,
         red_wires: list[int] | tuple[list[int], int] | None = None,
         constraints: list[SlotConstraint] | None = None,
+        validate_stand_sizes: bool = True,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -1753,6 +1754,11 @@ class GameState:
             constraints: List of ``SlotConstraint`` objects (e.g.,
                 ``AdjacentNotEqual``, ``MustHaveValue``). These are
                 passed through to ``GameState.slot_constraints``.
+            validate_stand_sizes: If True (default), verify that each
+                player's tile stand has the expected number of wires
+                based on the wire pool and captain dealing order.
+                Set to False for tests or scenarios where stand sizes
+                don't follow standard dealing (e.g., Grappling Hook).
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1787,6 +1793,27 @@ class GameState:
         wires_in_play, markers, uncertain_groups = _build_wire_config(
             blue_wires, yellow_wires, red_wires,
         )
+
+        # Validate tile stand sizes match the dealing distribution.
+        # Wires are dealt starting with the captain, clockwise. If
+        # the total doesn't divide evenly, earlier players get one
+        # extra wire.
+        if validate_stand_sizes:
+            total_wires = len(wires_in_play) + sum(
+                g.count_in_play for g in uncertain_groups
+            )
+            base_count = total_wires // player_count
+            extra = total_wires % player_count
+            for deal_offset in range(player_count):
+                p_idx = (captain + deal_offset) % player_count
+                expected = base_count + (1 if deal_offset < extra else 0)
+                actual = len(stands[p_idx].slots)
+                if actual != expected:
+                    raise ValueError(
+                        f"Player {p_idx} ({player_names[p_idx]}) has "
+                        f"{actual} wires but expected {expected} "
+                        f"({total_wires} total wires, captain={captain})"
+                    )
 
         return cls(
             players=players,

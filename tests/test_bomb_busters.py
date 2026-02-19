@@ -1039,7 +1039,7 @@ class TestGameStatePartialState(unittest.TestCase):
                 bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0), state=bomb_busters.SlotState.CUT),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["Me", "Them"],
             stands=stands,
         )
@@ -1052,7 +1052,7 @@ class TestGameStatePartialState(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B"],
             stands=stands,
             mistakes_remaining=0,
@@ -1066,7 +1066,7 @@ class TestGameStatePartialState(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0))]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B"],
             stands=stands,
         )
@@ -1108,7 +1108,7 @@ class TestGameStatePartialState(unittest.TestCase):
                 ),
             ]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B"],
             stands=stands,
         )
@@ -1117,7 +1117,7 @@ class TestGameStatePartialState(unittest.TestCase):
 
     def test_mismatched_stands_raises(self) -> None:
         with self.assertRaises(ValueError):
-            bomb_busters.GameState.from_partial_state(
+            bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
                 player_names=["A", "B"],
                 stands=[bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)])],  # Only 1 stand for 2 players
             )
@@ -1724,7 +1724,7 @@ class TestGameStateHelpers(unittest.TestCase):
         # Total blue-1 in game = 4. Player has 2. Unaccounted = 2.
         me = bomb_busters.TileStand.from_string("?1 ?1 ?3 ?4")
         other = bomb_busters.TileStand.from_string("? ? ? ?")
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=[other, other, other, me],
             active_player_index=3,
@@ -1738,7 +1738,7 @@ class TestGameStateHelpers(unittest.TestCase):
         # Player 3 has all 4 blue-1 wires. No unaccounted copies.
         me = bomb_busters.TileStand.from_string("?1 ?1 ?1 ?1 ?3")
         other = bomb_busters.TileStand.from_string("? ? ? ?")
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=[other, other, other, me],
             active_player_index=3,
@@ -1754,7 +1754,7 @@ class TestGameStateHelpers(unittest.TestCase):
         p1 = bomb_busters.TileStand.from_string("3 ? ? ?")
         p2 = bomb_busters.TileStand.from_string("? 3 ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ? ?")
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "Me"],
             stands=[p1, p2, p3, me],
             active_player_index=3,
@@ -1770,7 +1770,7 @@ class TestGameStateHelpers(unittest.TestCase):
         p1 = bomb_busters.TileStand.from_string("? i3 ? ?")
         p2 = bomb_busters.TileStand.from_string("? ? ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ? ?")
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "Me"],
             stands=[p1, p2, p3, me],
             active_player_index=3,
@@ -1786,7 +1786,7 @@ class TestGameStateHelpers(unittest.TestCase):
         p1 = bomb_busters.TileStand.from_string("? i3 ? ?")
         p2 = bomb_busters.TileStand.from_string("i3 ? ? ?")
         p3 = bomb_busters.TileStand.from_string("? ? ? ?")
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "Me"],
             stands=[p1, p2, p3, me],
             active_player_index=3,
@@ -1866,7 +1866,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             yellow_wires=([2, 3, 9], 2),
@@ -1893,7 +1893,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             yellow_wires=[4, 7],
@@ -1926,7 +1926,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             red_wires=[4],
@@ -1947,7 +1947,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             red_wires=([3, 7], 1),
@@ -1969,7 +1969,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             yellow_wires=([2, 3, 9], 2),
@@ -1997,7 +1997,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 8),
@@ -2016,7 +2016,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=custom,
@@ -2031,7 +2031,7 @@ class TestUncertainWireGroup(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ?"),
             bomb_busters.TileStand.from_string("? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
         )
@@ -2113,7 +2113,7 @@ class TestCaptainIndex(unittest.TestCase):
             ]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B"],
             stands=stands,
         )
@@ -2126,7 +2126,7 @@ class TestCaptainIndex(unittest.TestCase):
             ]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B"],
             stands=stands,
             captain=1,
@@ -2141,7 +2141,7 @@ class TestCaptainIndex(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None)]),
         ]
         with self.assertRaises(ValueError):
-            bomb_busters.GameState.from_partial_state(
+            bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
                 player_names=["A", "B"],
                 stands=stands,
                 captain=2,
@@ -2309,7 +2309,7 @@ class TestGameStateConstraints(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
         ]
-        return bomb_busters.GameState.from_partial_state(
+        return bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 5),
@@ -2402,7 +2402,7 @@ class TestPlaceInfoToken(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ?"),
             bomb_busters.TileStand.from_string("? ? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 3),
@@ -2539,7 +2539,7 @@ class TestReactivateCharacterCards(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ?"),
             bomb_busters.TileStand.from_string("? ? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 3),
@@ -2614,7 +2614,7 @@ class TestAddAdjacentConstraints(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
         ]
-        return bomb_busters.GameState.from_partial_state(
+        return bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 5),
@@ -2705,7 +2705,7 @@ class TestFastPassSoloCut(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 8),
@@ -2723,7 +2723,7 @@ class TestFastPassSoloCut(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 10),
@@ -2739,7 +2739,7 @@ class TestFastPassSoloCut(unittest.TestCase):
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
             bomb_busters.TileStand.from_string("? ? ? ? ?"),
         ]
-        game = bomb_busters.GameState.from_partial_state(
+        game = bomb_busters.GameState.from_partial_state(validate_stand_sizes=False,
             player_names=["A", "B", "C", "D"],
             stands=stands,
             blue_wires=(1, 8),

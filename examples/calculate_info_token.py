@@ -30,9 +30,9 @@ def main() -> None:
     # Captain (P0) — your stand, all wires known. Use ?N for hidden.
     captain = bomb_busters.TileStand.from_string("?2 ?3 ?4 ?8 ?8 ?10 ?10 ?11 ?11 ?12")
     p1 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
-    p2 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+    p2 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
     p3 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
-    p4 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+    p4 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
 
     # ── Create game state ──────────────────────────────────────
     game = bomb_busters.GameState.from_partial_state(
