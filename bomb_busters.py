@@ -2020,6 +2020,13 @@ class GameState:
         Solo cut requires that ALL remaining uncut wires of this value
         are in the player's hand.
 
+        In calculator mode, other players' hidden wires are ``None``
+        (unknown), so we cannot inspect them directly. Instead, we
+        count the total wires of this value in the game and verify
+        that all are accounted for — either on the active player's
+        own stand or publicly visible on other stands (cut or
+        info-revealed).
+
         Args:
             player_index: The player to check.
             value: The wire value (int 1-12 or 'YELLOW').
@@ -2029,43 +2036,66 @@ class GameState:
         """
         player = self.players[player_index]
 
-        # Count uncut wires of this value in the player's hand
-        player_uncut = sum(
+        # Count hidden wires of this value in the player's hand
+        # (only hidden wires can be included in a solo cut action).
+        player_hidden_count = sum(
             1 for s in player.tile_stand.slots
             if s.is_hidden
             and s.wire is not None
             and s.wire.gameplay_value == value
         )
 
-        if player_uncut < 2:
+        if player_hidden_count < 2:
             return False
 
-        # Count uncut wires of this value on OTHER players' stands
-        other_uncut = 0
+        # Total wires of this value known to exist in the game.
+        total_in_game = sum(
+            1 for w in self.wires_in_play
+            if w.gameplay_value == value
+        )
+        for group in self.uncertain_wire_groups:
+            if any(w.gameplay_value == value for w in group.candidates):
+                total_in_game += group.count_in_play
+
+        # Accounted-for wires: those whose location is known.
+        # 1. All of the active player's own wires of this value
+        #    (the active player knows their entire hand).
+        player_total = sum(
+            1 for s in player.tile_stand.slots
+            if s.wire is not None
+            and s.wire.gameplay_value == value
+        )
+
+        # 2. Publicly visible wires on other players' stands
+        #    (cut or info-revealed with known identity).
+        other_visible = 0
         for i, p in enumerate(self.players):
             if i == player_index:
                 continue
             for s in p.tile_stand.slots:
-                if (
-                    s.is_hidden
-                    and s.wire is not None
-                    and s.wire.gameplay_value == value
-                ):
-                    other_uncut += 1
+                if s.is_cut:
+                    if (
+                        s.wire is not None
+                        and s.wire.gameplay_value == value
+                    ):
+                        other_visible += 1
+                elif s.is_info_revealed:
+                    if (
+                        s.wire is not None
+                        and s.wire.gameplay_value == value
+                    ):
+                        other_visible += 1
+                    elif s.info_token == value:
+                        other_visible += 1
 
-        # Also count info-revealed wires (still on the stand, not cut)
-        for i, p in enumerate(self.players):
-            if i == player_index:
-                continue
-            for s in p.tile_stand.slots:
-                if (
-                    s.is_info_revealed
-                    and s.wire is not None
-                    and s.wire.gameplay_value == value
-                ):
-                    other_uncut += 1
+        accounted = player_total + other_visible
 
-        return other_uncut == 0 and player_uncut in (2, 4)
+        # If any wires of this value are unaccounted for, they could
+        # be on other players' hidden slots — cannot guarantee solo cut.
+        if total_in_game - accounted > 0:
+            return False
+
+        return player_hidden_count in (2, 4)
 
     def available_solo_cuts(self, player_index: int) -> list[int | str]:
         """List all values the player can solo cut.

@@ -1714,6 +1714,86 @@ class TestGameStateHelpers(unittest.TestCase):
         # Should skip player 1, go to player 2
         self.assertEqual(game.current_player_index, 2)
 
+    def test_can_solo_cut_calculator_mode_rejects_unknown_wires(self) -> None:
+        """In calculator mode, hidden wires on other stands are None.
+
+        can_solo_cut must not falsely allow a solo cut when unaccounted
+        wires could be on other players' hidden slots.
+        """
+        # Player 3 has two 1s, but other players have unknown hidden wires.
+        # Total blue-1 in game = 4. Player has 2. Unaccounted = 2.
+        me = bomb_busters.TileStand.from_string("?1 ?1 ?3 ?4")
+        other = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=[other, other, other, me],
+            active_player_index=3,
+            blue_wires=(1, 4),
+        )
+        self.assertFalse(game.can_solo_cut(3, 1))
+        self.assertEqual(game.available_solo_cuts(3), [])
+
+    def test_can_solo_cut_calculator_mode_allows_when_all_accounted(self) -> None:
+        """Solo cut is allowed when all wires of the value are accounted for."""
+        # Player 3 has all 4 blue-1 wires. No unaccounted copies.
+        me = bomb_busters.TileStand.from_string("?1 ?1 ?1 ?1 ?3")
+        other = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=[other, other, other, me],
+            active_player_index=3,
+            blue_wires=(1, 4),
+        )
+        self.assertTrue(game.can_solo_cut(3, 1))
+        self.assertIn(1, game.available_solo_cuts(3))
+
+    def test_can_solo_cut_calculator_mode_with_cut_wires_elsewhere(self) -> None:
+        """Solo cut allowed when remaining copies are all in player's hand."""
+        # 2 blue-3s cut on other stands, player has the remaining 2.
+        me = bomb_busters.TileStand.from_string("?2 ?3 ?3 ?4")
+        p1 = bomb_busters.TileStand.from_string("3 ? ? ?")
+        p2 = bomb_busters.TileStand.from_string("? 3 ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "Me"],
+            stands=[p1, p2, p3, me],
+            active_player_index=3,
+            blue_wires=(1, 4),
+        )
+        self.assertTrue(game.can_solo_cut(3, 3))
+
+    def test_can_solo_cut_calculator_mode_with_info_token_elsewhere(self) -> None:
+        """Info tokens on other stands account for wires of that value."""
+        # Player has 2 blue-3s. One blue-3 is info-revealed on another stand.
+        # 4 total - 2 player - 1 info-revealed = 1 unaccounted → no solo cut.
+        me = bomb_busters.TileStand.from_string("?2 ?3 ?3 ?4")
+        p1 = bomb_busters.TileStand.from_string("? i3 ? ?")
+        p2 = bomb_busters.TileStand.from_string("? ? ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "Me"],
+            stands=[p1, p2, p3, me],
+            active_player_index=3,
+            blue_wires=(1, 4),
+        )
+        self.assertFalse(game.can_solo_cut(3, 3))
+
+    def test_can_solo_cut_calculator_mode_info_tokens_complete_set(self) -> None:
+        """Solo cut allowed when info tokens + player's hand cover all copies."""
+        # Player has 2 blue-3s. The other 2 are info-revealed on other stands.
+        # 4 total - 2 player - 2 info-revealed = 0 unaccounted → solo cut OK.
+        me = bomb_busters.TileStand.from_string("?2 ?3 ?3 ?4")
+        p1 = bomb_busters.TileStand.from_string("? i3 ? ?")
+        p2 = bomb_busters.TileStand.from_string("i3 ? ? ?")
+        p3 = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "Me"],
+            stands=[p1, p2, p3, me],
+            active_player_index=3,
+            blue_wires=(1, 4),
+        )
+        self.assertTrue(game.can_solo_cut(3, 3))
+
 
 class TestUncertainWireGroup(unittest.TestCase):
     """Tests for the bomb_busters.UncertainWireGroup class."""
