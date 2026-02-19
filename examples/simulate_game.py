@@ -11,7 +11,11 @@ Carlo sampling based on game complexity (hidden position count).
 Tracks per-player performance metrics and timing throughout.
 """
 
+import pathlib
+import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bomb_busters
 import compute_probabilities

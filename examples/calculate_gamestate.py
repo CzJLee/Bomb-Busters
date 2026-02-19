@@ -6,6 +6,11 @@ player's perspective. Includes dual cut, solo cut, Double Detector,
 and red wire risk calculations.
 """
 
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
 import bomb_busters
 import compute_probabilities
 

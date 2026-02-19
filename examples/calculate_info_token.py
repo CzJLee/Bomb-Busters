@@ -16,20 +16,19 @@ import compute_probabilities
 def main() -> None:
     # ── Wire configuration ────────────────────────────────────
     # Colored wires: uncomment and adjust as needed.
+
     # Known yellow/red (list form):
     #   yellow_wires = [4, 7]    # Y4, Y7 definitely in play
     #   red_wires = [4]          # R4 definitely in play
+
     # Uncertain X-of-Y (tuple form):
     #   yellow_wires = ([2, 3, 9], 2)  # drew 3, kept 2
     #   red_wires = ([3, 7], 1)        # drew 2, kept 1
 
     # ── Tile stands ────────────────────────────────────────────
+    player_names = ["Alice", "Bob", "Charlie", "Diana", "Eve"]
     # Captain (P0) — your stand, all wires known. Use ?N for hidden.
-    captain = bomb_busters.TileStand.from_string(
-        "?1 ?2 ?4 ?5 ?6 ?7 ?8 ?9 ?10 ?12",
-    )
-
-    # Other players — all hidden at game start
+    captain = bomb_busters.TileStand.from_string("?1 ?2 ?4 ?5 ?6 ?7 ?8 ?9 ?10 ?12")
     p1 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
     p2 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
     p3 = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
@@ -37,7 +36,7 @@ def main() -> None:
 
     # ── Create game state ──────────────────────────────────────
     game = bomb_busters.GameState.from_partial_state(
-        player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+        player_names=player_names,
         stands=[captain, p1, p2, p3, p4],
         active_player_index=0,
         captain=0,

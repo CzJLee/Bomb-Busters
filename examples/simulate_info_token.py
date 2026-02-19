@@ -8,7 +8,11 @@ clockwise indication phase starting with the captain.
 Each player's indication analysis is timed to verify performance.
 """
 
+import pathlib
+import sys
 import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bomb_busters
 import compute_probabilities
