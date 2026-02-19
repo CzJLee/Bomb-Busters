@@ -1779,6 +1779,7 @@ class TestUncertainWireGroup(unittest.TestCase):
         self.assertEqual(group.discard_count, 3)
 
     def test_from_partial_state_auto_generates_markers(self) -> None:
+        """yellow_wires=([2, 3, 9], 2) creates 3 UNCERTAIN markers."""
         stands = [
             bomb_busters.TileStand.from_string("?1 ?5"),
             bomb_busters.TileStand.from_string("? ?"),
@@ -1788,13 +1789,7 @@ class TestUncertainWireGroup(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B", "C", "D"],
             stands=stands,
-            wires_in_play=[
-                bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
-                for i in [1, 2, 3, 4, 5, 6]
-            ],
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            yellow_wires=([2, 3, 9], 2),
         )
         yellow_markers = [
             m for m in game.markers
@@ -1810,11 +1805,8 @@ class TestUncertainWireGroup(unittest.TestCase):
         marker_bases = sorted(m.base_number for m in yellow_markers)
         self.assertEqual(marker_bases, [2, 3, 9])
 
-    def test_auto_markers_dont_duplicate_manual(self) -> None:
-        manual_marker = bomb_busters.Marker(
-            bomb_busters.WireColor.YELLOW, 2.1,
-            bomb_busters.MarkerState.UNCERTAIN,
-        )
+    def test_convenience_known_yellow_markers(self) -> None:
+        """yellow_wires=[4, 7] creates 2 KNOWN markers."""
         stands = [
             bomb_busters.TileStand.from_string("?1 ?5"),
             bomb_busters.TileStand.from_string("? ?"),
@@ -1824,21 +1816,147 @@ class TestUncertainWireGroup(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B", "C", "D"],
             stands=stands,
-            markers=[manual_marker],
-            wires_in_play=[
-                bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
-                for i in [1, 2, 3, 4, 5, 6]
-            ],
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            yellow_wires=[4, 7],
         )
         yellow_markers = [
             m for m in game.markers
             if m.color == bomb_busters.WireColor.YELLOW
         ]
-        # 3 unique markers (2.1 not duplicated)
+        self.assertEqual(len(yellow_markers), 2)
+        self.assertTrue(
+            all(
+                m.state == bomb_busters.MarkerState.KNOWN
+                for m in yellow_markers
+            )
+        )
+        marker_bases = sorted(m.base_number for m in yellow_markers)
+        self.assertEqual(marker_bases, [4, 7])
+        # Known yellow wires should be in wires_in_play
+        yellow_in_play = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.YELLOW
+        ]
+        self.assertEqual(len(yellow_in_play), 2)
+
+    def test_convenience_known_red(self) -> None:
+        """red_wires=[4] creates KNOWN marker and adds R4 to wires_in_play."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            red_wires=[4],
+        )
+        self.assertEqual(len(game.markers), 1)
+        self.assertEqual(game.markers[0].color, bomb_busters.WireColor.RED)
+        self.assertEqual(game.markers[0].sort_value, 4.5)
+        self.assertEqual(game.markers[0].state, bomb_busters.MarkerState.KNOWN)
+        red_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.RED]
+        self.assertEqual(len(red_in_play), 1)
+        self.assertEqual(red_in_play[0].sort_value, 4.5)
+
+    def test_convenience_uncertain_red(self) -> None:
+        """red_wires=([3, 7], 1) creates UNCERTAIN markers and group."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            red_wires=([3, 7], 1),
+        )
+        self.assertEqual(len(game.markers), 2)
+        self.assertTrue(all(m.state == bomb_busters.MarkerState.UNCERTAIN for m in game.markers))
+        self.assertTrue(all(m.color == bomb_busters.WireColor.RED for m in game.markers))
+        self.assertEqual(len(game.uncertain_wire_groups), 1)
+        self.assertEqual(game.uncertain_wire_groups[0].count_in_play, 1)
+        # Red wires should NOT be in wires_in_play (they're uncertain)
+        red_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.RED]
+        self.assertEqual(len(red_in_play), 0)
+
+    def test_convenience_mixed(self) -> None:
+        """Known red + uncertain yellow together."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            yellow_wires=([2, 3, 9], 2),
+            red_wires=[4],
+        )
+        # 3 yellow UNCERTAIN + 1 red KNOWN = 4 markers
+        self.assertEqual(len(game.markers), 4)
+        yellow_markers = [m for m in game.markers if m.color == bomb_busters.WireColor.YELLOW]
+        red_markers = [m for m in game.markers if m.color == bomb_busters.WireColor.RED]
         self.assertEqual(len(yellow_markers), 3)
+        self.assertTrue(all(m.state == bomb_busters.MarkerState.UNCERTAIN for m in yellow_markers))
+        self.assertEqual(len(red_markers), 1)
+        self.assertEqual(red_markers[0].state, bomb_busters.MarkerState.KNOWN)
+        # Red wire in wires_in_play, yellow not
+        red_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.RED]
+        self.assertEqual(len(red_in_play), 1)
+        yellow_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.YELLOW]
+        self.assertEqual(len(yellow_in_play), 0)
+
+    def test_convenience_blue_range(self) -> None:
+        """blue_wires=(1, 8) creates 32 blue wires."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=(1, 8),
+        )
+        blue_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.BLUE]
+        self.assertEqual(len(blue_in_play), 32)
+        values = sorted({int(w.sort_value) for w in blue_in_play})
+        self.assertEqual(values, list(range(1, 9)))
+
+    def test_convenience_custom_blue_list(self) -> None:
+        """blue_wires=[Wire(...)] passes through a custom pool."""
+        custom = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in [1, 1, 2, 2]]
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?2"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+            blue_wires=custom,
+        )
+        self.assertEqual(len(game.wires_in_play), 4)
+
+    def test_convenience_default_blue(self) -> None:
+        """No blue_wires param -> all 48 blue wires (1-12)."""
+        stands = [
+            bomb_busters.TileStand.from_string("?1 ?5"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+            bomb_busters.TileStand.from_string("? ?"),
+        ]
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D"],
+            stands=stands,
+        )
+        blue_in_play = [w for w in game.wires_in_play if w.color == bomb_busters.WireColor.BLUE]
+        self.assertEqual(len(blue_in_play), 48)
 
 
 class TestCaptainIndex(unittest.TestCase):

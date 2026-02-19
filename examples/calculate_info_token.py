@@ -1,6 +1,6 @@
 """Quick indication calculator for a live game session.
 
-Edit the tile stands and wires_in_play below, then run:
+Edit the tile stands and wire parameters below, then run:
     python examples/calculate_info_token.py
 """
 
@@ -14,20 +14,14 @@ import compute_probabilities
 
 
 def main() -> None:
-    # ── Wires in play ──────────────────────────────────────────
-    wires_in_play = bomb_busters.create_all_blue_wires()
-    # + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)]
-    # + [bomb_busters.Wire(bomb_busters.WireColor.RED, 4.5)]
-
-    # ── Board markers ──────────────────────────────────────────
-    markers: list[bomb_busters.Marker] = [
-        # bomb_busters.Marker(bomb_busters.WireColor.YELLOW, 4.1, bomb_busters.MarkerState.KNOWN),
-    ]
-
-    # ── Uncertain wire groups (X of Y) ─────────────────────────
-    uncertain_wire_groups: list[bomb_busters.UncertainWireGroup] = [
-        # bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-    ]
+    # ── Wire configuration ────────────────────────────────────
+    # Colored wires: uncomment and adjust as needed.
+    # Known yellow/red (list form):
+    #   yellow_wires = [4, 7]    # Y4, Y7 definitely in play
+    #   red_wires = [4]          # R4 definitely in play
+    # Uncertain X-of-Y (tuple form):
+    #   yellow_wires = ([2, 3, 9], 2)  # drew 3, kept 2
+    #   red_wires = ([3, 7], 1)        # drew 2, kept 1
 
     # ── Tile stands ────────────────────────────────────────────
     # Captain (P0) — your stand, all wires known. Use ?N for hidden.
@@ -45,11 +39,11 @@ def main() -> None:
     game = bomb_busters.GameState.from_partial_state(
         player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
         stands=[captain, p1, p2, p3, p4],
-        wires_in_play=wires_in_play,
-        markers=markers,
-        uncertain_wire_groups=uncertain_wire_groups or None,
         active_player_index=0,
         captain=0,
+        # blue_wires=None,       # default: all blue 1-12 (48 wires)
+        # yellow_wires=[4, 7],   # uncomment for known yellow wires
+        # red_wires=[4],         # uncomment for known red wires
     )
 
     # ── Display & analysis ─────────────────────────────────────

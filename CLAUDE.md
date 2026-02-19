@@ -54,6 +54,6 @@ A browser-based UI is planned (see @docs/WEB_UI_ROADMAP.md for full details). Th
 
 - **Keep stdlib-only.** No dependencies that Pyodide cannot load. Optional imports (like `tqdm`) must use `try/except ImportError`.
 - **Structured data over formatted strings.** New analysis features should always provide a data-returning function separate from any print/display function. The web UI consumes `RankedMove`, `Counter`, and dict structures — not terminal output.
-- **`from_partial_state()` is the API contract.** The web UI constructs game state exclusively through this factory method. Changes to its signature must be backward-compatible (new optional parameters only).
+- **`from_partial_state()` is the API contract.** The web UI constructs game state exclusively through this factory method.
 - **Serialization readiness.** Dataclass fields should use simple types (int, float, str, bool, None, lists, dicts). Avoid fields with functions, generators, or circular references.
 - **Separate ANSI formatting from logic.** Keep data extraction (what to show) separate from formatting (how to show it). The `value_label()` and `stand_lines()` patterns are good — maintain this separation.

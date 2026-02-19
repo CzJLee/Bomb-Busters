@@ -87,7 +87,7 @@ class TestExtractKnownInfo(unittest.TestCase):
                 bomb_busters.TileStand.from_string("? ? ? ?"),
                 bomb_busters.TileStand.from_string("? ? ? ?"),
             ],
-            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+            blue_wires=(1, 4),
         )
         with self.assertRaises(ValueError) as cm:
             compute_probabilities.extract_known_info(game, 0)
@@ -106,7 +106,7 @@ class TestExtractKnownInfo(unittest.TestCase):
                 bomb_busters.TileStand.from_string("? ? ? ?"),
                 bomb_busters.TileStand.from_string("? ? ? ?"),
             ],
-            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+            blue_wires=(1, 4),
         )
         # Should not raise
         known = compute_probabilities.extract_known_info(game, 0)
@@ -606,7 +606,7 @@ class TestCalculatorMode(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=all_wires,
+            blue_wires=all_wires,
         )
 
         # P1[1] must have sort_value > 3.0 (because P1[0] = CUT-3)
@@ -1079,12 +1079,8 @@ class TestProbabilityOfRedWire(unittest.TestCase):
         Total wires: 8 (6 blue + 1 red). Observer has 2, P1 cut has 1.
         Unknown pool = 8 - 2 - 1 = 5 wires for 5 hidden positions.
         """
-        all_blue = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
-                    for i in [1, 2, 5, 6, 8, 9]]
-        red_wire = bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5)
-        # Add another blue wire to balance pool vs positions
-        extra_blue = bomb_busters.Wire(bomb_busters.WireColor.BLUE, 10.0)
-        all_wires = all_blue + [red_wire, extra_blue]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in [1, 2, 5, 6, 8, 9, 10]]
 
         stands = [
             # P0: knows own hand
@@ -1110,17 +1106,8 @@ class TestProbabilityOfRedWire(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            markers=[
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.RED, 3.5,
-                    bomb_busters.MarkerState.UNCERTAIN,
-                ),
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.RED, 7.5,
-                    bomb_busters.MarkerState.UNCERTAIN,
-                ),
-            ],
-            wires_in_play=all_wires,
+            blue_wires=blue_wires,
+            red_wires=[3],
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -1172,10 +1159,8 @@ class TestProbabilityOfRedWire(unittest.TestCase):
 
         Fix: add another wire to balance.
         """
-        all_blue = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
-                    for i in [1, 2, 3, 4, 5, 6]]
-        red_wire = bomb_busters.Wire(bomb_busters.WireColor.RED, 3.5)
-        all_wires = all_blue + [red_wire]
+        blue_wires = [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i))
+                      for i in [1, 2, 3, 4, 5, 6]]
         # 7 total wires. Observer has 2, P1 has 2 cut → pool = 3, positions = 3.
 
         stands = [
@@ -1204,17 +1189,8 @@ class TestProbabilityOfRedWire(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            markers=[
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.RED, 3.5,
-                    bomb_busters.MarkerState.UNCERTAIN,
-                ),
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.RED, 7.5,
-                    bomb_busters.MarkerState.UNCERTAIN,
-                ),
-            ],
-            wires_in_play=all_wires,
+            blue_wires=blue_wires,
+            red_wires=[3],
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -1999,17 +1975,11 @@ class TestYellowInfoRevealed(unittest.TestCase):
             # P3: both hidden
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
-        all_wires = (
-            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 9)]
-            + [
-                bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
-                bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 6.1),
-            ]
-        )
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=all_wires,
+            blue_wires=(1, 8),
+            yellow_wires=[4, 6],
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2060,14 +2030,11 @@ class TestYellowInfoRevealed(unittest.TestCase):
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
             bomb_busters.TileStand(slots=[bomb_busters.Slot(wire=None), bomb_busters.Slot(wire=None)]),
         ]
-        all_wires = (
-            [bomb_busters.Wire(bomb_busters.WireColor.BLUE, float(i)) for i in range(1, 8)]
-            + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 3.1)]
-        )
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=all_wires,
+            blue_wires=(1, 7),
+            yellow_wires=[3],
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2129,10 +2096,8 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([2, 3, 9], 2),
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2215,10 +2180,8 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([2, 3, 9], 2),
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2281,10 +2244,8 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([2, 3, 9], 2),
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2347,11 +2308,9 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 4, 6], count=2),
-                bomb_busters.UncertainWireGroup.red([3, 7], count=1),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([2, 4, 6], 2),
+            red_wires=([3, 7], 1),
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2418,10 +2377,8 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([3, 5], count=2),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([3, 5], 2),
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2467,7 +2424,7 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
+            blue_wires=blue_wires,
         )
 
         probs = compute_probabilities.compute_position_probabilities(game, 0)
@@ -2526,10 +2483,8 @@ class TestUncertainWireGroups(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Me", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=blue_wires,
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            blue_wires=blue_wires,
+            yellow_wires=([2, 3, 9], 2),
         )
 
         # P1[1] has bounds [2.0, 5.0]. Blue-3 (sv=3.0), Y2 (sv=2.1),
@@ -2581,7 +2536,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=(
+            blue_wires=(
                 bomb_busters.create_blue_wires(1, 1)
                 + bomb_busters.create_blue_wires(5, 5)
                 + bomb_busters.create_blue_wires(7, 7)
@@ -2609,23 +2564,12 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=(
+            blue_wires=(
                 bomb_busters.create_blue_wires(1, 1)
                 + bomb_busters.create_blue_wires(5, 5)
                 + bomb_busters.create_blue_wires(7, 7)
-                + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1),
-                   bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 7.1)]
             ),
-            markers=[
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.YELLOW, 4.1,
-                    bomb_busters.MarkerState.KNOWN,
-                ),
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.YELLOW, 7.1,
-                    bomb_busters.MarkerState.KNOWN,
-                ),
-            ],
+            yellow_wires=[4, 7],
             active_player_index=0,
         )
 
@@ -2644,7 +2588,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=(
+            blue_wires=(
                 bomb_busters.create_blue_wires(1, 1)
                 + bomb_busters.create_blue_wires(5, 5)
                 + bomb_busters.create_blue_wires(7, 7)
@@ -2703,7 +2647,7 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=wires,
+            blue_wires=wires,
             active_player_index=0,
         )
 
@@ -2748,24 +2692,13 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=(
+            blue_wires=(
                 bomb_busters.create_blue_wires(1, 1)
                 + bomb_busters.create_blue_wires(3, 3)
                 + bomb_busters.create_blue_wires(5, 5)
                 + bomb_busters.create_blue_wires(9, 9)
-                + [bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 2.1),
-                   bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 9.1)]
             ),
-            markers=[
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.YELLOW, 2.1,
-                    bomb_busters.MarkerState.KNOWN,
-                ),
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.YELLOW, 9.1,
-                    bomb_busters.MarkerState.KNOWN,
-                ),
-            ],
+            yellow_wires=[2, 9],
             active_player_index=0,
         )
 
@@ -2796,15 +2729,13 @@ class TestInfoRevealedProbability(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=[p0, p1, p2, p3],
-            wires_in_play=(
+            blue_wires=(
                 bomb_busters.create_blue_wires(1, 1)
                 + bomb_busters.create_blue_wires(3, 3)
                 + bomb_busters.create_blue_wires(5, 5)
                 + bomb_busters.create_blue_wires(9, 9)
             ),
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 9], count=2),
-            ],
+            yellow_wires=([2, 3, 9], 2),
             active_player_index=0,
         )
 
@@ -2848,7 +2779,6 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -2884,7 +2814,6 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -2918,7 +2847,6 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -2940,7 +2868,6 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -2970,9 +2897,8 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=(
-                bomb_busters.create_all_blue_wires() + [yellow, red]
-            ),
+            yellow_wires=[4],
+            red_wires=[7],
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -3004,12 +2930,10 @@ class TestIndicationQuality(unittest.TestCase):
         game_with = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob_with_indication, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
         game_without = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob_without, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices_with = compute_probabilities.rank_indications(
@@ -3044,7 +2968,7 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
-            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+            blue_wires=(1, 4),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -3066,7 +2990,7 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
-            wires_in_play=bomb_busters.create_blue_wires(1, 2),
+            blue_wires=(1, 2),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -3096,7 +3020,7 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
-            wires_in_play=bomb_busters.create_blue_wires(1, 4),
+            blue_wires=(1, 4),
         )
 
         with self.assertRaises(ValueError):
@@ -3113,17 +3037,10 @@ class TestIndicationQuality(unittest.TestCase):
         diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
         eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
 
-        red_7 = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires() + [red_7],
-            markers=[
-                bomb_busters.Marker(
-                    bomb_busters.WireColor.RED, 7.5,
-                    bomb_busters.MarkerState.KNOWN,
-                ),
-            ],
+            red_wires=[7],
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -3146,7 +3063,6 @@ class TestIndicationQuality(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
             stands=[alice, bob, charlie, diana, eve],
-            wires_in_play=bomb_busters.create_all_blue_wires(),
         )
 
         choices = compute_probabilities.rank_indications(game, player_index=0)
@@ -3368,10 +3284,8 @@ class TestMonteCarloSampling(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
-            wires_in_play=bomb_busters.create_blue_wires(1, 5),
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 4], count=2),
-            ],
+            blue_wires=(1, 5),
+            yellow_wires=([2, 3, 4], 2),
         )
 
         result = compute_probabilities.monte_carlo_probabilities(
@@ -3568,10 +3482,8 @@ class TestMonteCarloSampling(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["Alice", "Bob", "Charlie", "Diana"],
             stands=[alice, bob, charlie, diana],
-            wires_in_play=bomb_busters.create_blue_wires(1, 3),
-            uncertain_wire_groups=[
-                bomb_busters.UncertainWireGroup.yellow([2, 3, 4], count=2),
-            ],
+            blue_wires=(1, 3),
+            yellow_wires=([2, 3, 4], 2),
         )
 
         # Verify pool/position balance
@@ -3635,7 +3547,7 @@ class TestSolverCombinatorialWeights(unittest.TestCase):
         game = bomb_busters.GameState.from_partial_state(
             player_names=["A", "B", "C", "D"],
             stands=stands,
-            wires_in_play=bomb_busters.create_blue_wires(1, 2),
+            blue_wires=(1, 2),
             active_player_index=0,
         )
         probs = compute_probabilities.compute_position_probabilities(
@@ -3862,13 +3774,16 @@ class TestMCDoubleDetector(unittest.TestCase):
              bomb_busters.Wire(blue, 9.0)],
         ]
         all_wires = [w for h in hands for w in h]
+        blue_wires = [w for w in all_wires if w.color == blue]
+        red_numbers = [w.base_number for w in all_wires if w.color == red]
         stands = [
             bomb_busters.TileStand.from_wires(h) for h in hands
         ]
         game = bomb_busters.GameState.from_partial_state(
             player_names=["P0", "P1", "P2", "P3"],
             stands=stands,
-            wires_in_play=all_wires,
+            blue_wires=blue_wires,
+            red_wires=red_numbers,
             active_player_index=0,
         )
 

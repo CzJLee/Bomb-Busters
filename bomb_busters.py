@@ -199,6 +199,85 @@ def create_all_yellow_wires() -> list[Wire]:
 
 
 # =============================================================================
+# Wire Config Builder (for from_partial_state)
+# =============================================================================
+
+def _build_wire_config(
+    blue_wires: list[Wire] | tuple[int, int] | None,
+    yellow_wires: list[int] | tuple[list[int], int] | None,
+    red_wires: list[int] | tuple[list[int], int] | None,
+) -> tuple[list[Wire], list[Marker], list[UncertainWireGroup]]:
+    """Derive wires_in_play, markers, and uncertain_wire_groups.
+
+    Translates the convenience parameters into the three internal
+    GameState attributes needed by the probability engine and display.
+
+    Args:
+        blue_wires: Blue wire pool. ``None`` = all blue 1-12 (48 wires).
+            ``(low, high)`` tuple = ``create_blue_wires(low, high)``.
+            ``list[Wire]`` = custom wire list (for tests).
+        yellow_wires: Yellow wire specification. ``None`` = no yellow.
+            ``[4, 7]`` = Y4, Y7 definitely in play (KNOWN markers).
+            ``([2, 3, 9], 2)`` = 2-of-3 uncertain (UNCERTAIN markers).
+        red_wires: Red wire specification. Same semantics as yellow.
+
+    Returns:
+        A tuple of (wires_in_play, markers, uncertain_wire_groups).
+    """
+    # ── Blue wires ────────────────────────────────────────────
+    if blue_wires is None:
+        pool = create_all_blue_wires()
+    elif isinstance(blue_wires, tuple):
+        low, high = blue_wires
+        pool = create_blue_wires(low, high)
+    else:
+        pool = list(blue_wires)
+
+    markers: list[Marker] = []
+    uncertain_groups: list[UncertainWireGroup] = []
+
+    # ── Yellow wires ──────────────────────────────────────────
+    if yellow_wires is not None:
+        if isinstance(yellow_wires, tuple):
+            numbers, count = yellow_wires
+            uncertain_groups.append(
+                UncertainWireGroup.yellow(numbers, count=count),
+            )
+            for n in numbers:
+                markers.append(
+                    Marker(WireColor.YELLOW, n + 0.1, MarkerState.UNCERTAIN),
+                )
+        else:
+            for n in yellow_wires:
+                wire = Wire(WireColor.YELLOW, n + 0.1)
+                pool.append(wire)
+                markers.append(
+                    Marker(WireColor.YELLOW, n + 0.1, MarkerState.KNOWN),
+                )
+
+    # ── Red wires ─────────────────────────────────────────────
+    if red_wires is not None:
+        if isinstance(red_wires, tuple):
+            numbers, count = red_wires
+            uncertain_groups.append(
+                UncertainWireGroup.red(numbers, count=count),
+            )
+            for n in numbers:
+                markers.append(
+                    Marker(WireColor.RED, n + 0.5, MarkerState.UNCERTAIN),
+                )
+        else:
+            for n in red_wires:
+                wire = Wire(WireColor.RED, n + 0.5)
+                pool.append(wire)
+                markers.append(
+                    Marker(WireColor.RED, n + 0.5, MarkerState.KNOWN),
+                )
+
+    return pool, markers, uncertain_groups
+
+
+# =============================================================================
 # Slot
 # =============================================================================
 
@@ -1391,19 +1470,23 @@ class GameState:
         player_names: list[str],
         stands: list[TileStand],
         mistakes_remaining: int | None = None,
-        markers: list[Marker] | None = None,
         equipment: list[Equipment] | None = None,
-        wires_in_play: list[Wire] | None = None,
         character_cards: list[CharacterCard | None] | None = None,
         history: TurnHistory | None = None,
         active_player_index: int = 0,
-        uncertain_wire_groups: list[UncertainWireGroup] | None = None,
         captain: int = 0,
+        blue_wires: list[Wire] | tuple[int, int] | None = None,
+        yellow_wires: list[int] | tuple[list[int], int] | None = None,
+        red_wires: list[int] | tuple[list[int], int] | None = None,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
         Use this to enter a game state during a real game for probability
         calculations, without needing to replay all turns.
+
+        Wire configuration uses one parameter per color. The internal
+        ``wires_in_play``, ``markers``, and ``uncertain_wire_groups``
+        attributes are all auto-derived from these parameters.
 
         Args:
             player_names: Names of all players.
@@ -1413,23 +1496,25 @@ class GameState:
             mistakes_remaining: How many more mistakes the team can
                 survive. Defaults to ``player_count - 1`` (a fresh
                 mission).
-            markers: Board markers for red/yellow wires.
             equipment: Equipment cards in play.
-            wires_in_play: All wires that were included in this mission.
-                For uncertain (X of Y) colored wires, include only the
-                definite wires here; use ``uncertain_wire_groups`` for
-                the candidates.
             character_cards: Character card for each player (or None).
             history: Optional turn history for deduction.
             active_player_index: Index of the player whose turn it is.
                 Display output is rendered from this player's perspective
                 (their wires visible, others masked as '?'). Defaults to 0.
-            uncertain_wire_groups: Groups of colored wires with uncertain
-                inclusion from X-of-Y mission setup. UNCERTAIN markers
-                are auto-generated from the candidates. The probability
-                engine uses discard slots to enumerate which candidates
-                are in play.
             captain: Player index of the captain. Defaults to 0.
+            blue_wires: Blue wire pool. ``None`` (default) = all blue
+                1-12 (48 wires). ``(low, high)`` tuple = blue wires for
+                values low through high (4 copies each).
+                ``list[Wire]`` = custom wire list.
+            yellow_wires: Yellow wire specification. ``None`` (default)
+                = no yellow wires. ``[4, 7]`` = Y4 and Y7 definitely
+                in play (KNOWN markers). ``([2, 3, 9], 2)`` = 2-of-3
+                uncertain (UNCERTAIN markers, solver handles
+                combinatorics).
+            red_wires: Red wire specification. Same semantics as
+                ``yellow_wires``. ``[4]`` = R4 definitely in play.
+                ``([3, 7], 1)`` = 1-of-2 uncertain.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -1461,18 +1546,9 @@ class GameState:
             mistakes_remaining = max_failures
         failures = max_failures - mistakes_remaining
 
-        # Auto-generate UNCERTAIN markers from uncertain wire groups
-        groups = uncertain_wire_groups or []
-        all_markers = list(markers or [])
-        existing_sort_values = {m.sort_value for m in all_markers}
-        for group in groups:
-            for wire in group.candidates:
-                if wire.sort_value not in existing_sort_values:
-                    all_markers.append(
-                        Marker(group.color, wire.sort_value,
-                               MarkerState.UNCERTAIN)
-                    )
-                    existing_sort_values.add(wire.sort_value)
+        wires_in_play, markers, uncertain_groups = _build_wire_config(
+            blue_wires, yellow_wires, red_wires,
+        )
 
         return cls(
             players=players,
@@ -1480,11 +1556,11 @@ class GameState:
                 failures=failures,
                 max_failures=max_failures,
             ),
-            markers=all_markers,
+            markers=markers,
             equipment=equipment or [],
             history=history or TurnHistory(),
-            wires_in_play=wires_in_play or [],
-            uncertain_wire_groups=groups,
+            wires_in_play=wires_in_play,
+            uncertain_wire_groups=uncertain_groups,
             current_player_index=active_player_index,
             active_player_index=active_player_index,
             captain_index=captain,

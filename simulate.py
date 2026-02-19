@@ -13,18 +13,6 @@ import compute_probabilities
 INCLUDE_DOUBLE_DETECTOR = True
 
 
-# ── Wire helpers ────────────────────────────────────────────
-
-def _yellow(n: int) -> bomb_busters.Wire:
-    """Create a yellow wire with sort value n.1."""
-    return bomb_busters.Wire(bomb_busters.WireColor.YELLOW, n + 0.1)
-
-
-def _red(n: int) -> bomb_busters.Wire:
-    """Create a red wire with sort value n.5."""
-    return bomb_busters.Wire(bomb_busters.WireColor.RED, n + 0.5)
-
-
 # ── Main ────────────────────────────────────────────────────
 
 def main() -> None:
@@ -56,29 +44,6 @@ def main() -> None:
     print("Mid-game probability analysis (Alice's perspective)")
     print("=" * 60)
     print()
-
-    # ── Build wires_in_play ─────────────────────────────────
-    wires_in_play = (
-        bomb_busters.create_all_blue_wires()
-        + [_yellow(4), _yellow(7)]
-        + [_red(4)]
-    )
-
-    # ── Board markers ───────────────────────────────────────
-    markers = [
-        bomb_busters.Marker(
-            bomb_busters.WireColor.YELLOW, 4.1,
-            bomb_busters.MarkerState.KNOWN,
-        ),
-        bomb_busters.Marker(
-            bomb_busters.WireColor.YELLOW, 7.1,
-            bomb_busters.MarkerState.KNOWN,
-        ),
-        bomb_busters.Marker(
-            bomb_busters.WireColor.RED, 4.5,
-            bomb_busters.MarkerState.KNOWN,
-        ),
-    ]
 
     # ── Turn history ──────────────────────────────────────────
     # Diana's slot E has an info token from a prior failed dual cut
@@ -134,12 +99,12 @@ def main() -> None:
             diana_stand, eve_stand,
         ],
         mistakes_remaining=3,
-        markers=markers,
-        wires_in_play=wires_in_play,
         character_cards=character_cards,
         history=history,
         active_player_index=0,
         captain=0,
+        yellow_wires=[4, 7],
+        red_wires=[4],
     )
 
     # ── Display game state ──────────────────────────────────
