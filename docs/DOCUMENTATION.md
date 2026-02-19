@@ -24,6 +24,11 @@ For the game rules, see [RULES.md](RULES.md). For algorithm internals, see [EXAC
   - [`GameState.from_partial_state()`](#gamestatefrom_partial_state)
   - [`TileStand.from_string()`](#tilestandfrom_string)
   - [Uncertain (X of Y) Wires](#uncertain-x-of-y-wires)
+- [Missions (`missions.py`)](#missions-missionspy)
+  - [Enums](#enums-1)
+  - [Equipment Catalog](#equipment-catalog)
+  - [Mission Dataclass](#mission-dataclass)
+  - [Mission Registry](#mission-registry)
 - [Probability Engine (`compute_probabilities.py`)](#probability-engine-compute_probabilitiespy)
   - [Knowledge Extraction](#knowledge-extraction)
   - [Constraint Solver](#constraint-solver)
@@ -38,6 +43,7 @@ For the game rules, see [RULES.md](RULES.md). For algorithm internals, see [EXAC
 ```
 bomb_busters.py              # Game model: enums, dataclasses, game state, actions
 compute_probabilities.py     # Probability engine: constraint solver and API
+missions.py                  # Mission definitions: equipment catalog, mission 1-30
 simulate.py                  # Example mid-game probability analysis
 simulate_info_token.py       # Example indication phase simulation
 simulate_game.py             # Full mission simulation (indication + cutting phases)
@@ -54,6 +60,7 @@ tests/
   __init__.py
   test_bomb_busters.py       # Game model tests
   test_compute_probabilities.py  # Probability engine tests
+  test_missions.py           # Mission definitions tests
 web/                         # Future: browser-based UI (see WEB_UI_ROADMAP.md)
 CLAUDE.md                    # Project instructions for Claude
 README.md                    # Project overview
@@ -157,12 +164,14 @@ When the game ends, a status line appears at the bottom:
 | `ActionType` | DUAL_CUT, SOLO_CUT, REVEAL_RED | Player action types |
 | `ActionResult` | SUCCESS, FAIL_BLUE_YELLOW, FAIL_RED | Dual cut outcomes |
 | `MarkerState` | KNOWN, UNCERTAIN | Board marker state (certain vs "X of Y" mode) |
+| `Parity` | EVEN, ODD | Parity of a wire value for even/odd indicator tokens |
+| `Multiplicity` | SINGLE (1), DOUBLE (2), TRIPLE (3) | Wire value count for x1/x2/x3 tokens |
 
 ### Core Classes
 
 **`Wire`** (frozen dataclass) — A physical wire tile. Uses a `sort_value` encoding for natural sort order: blue N = `N.0`, yellow = `N.1`, red = `N.5`. Properties: `base_number` (integer part), `gameplay_value` (int 1-12 for blue, `"YELLOW"`, or `"RED"`).
 
-**`Slot`** — A single position on a tile stand. Holds a `Wire` (or `None` in calculator mode), a `SlotState`, and an optional `info_token` value.
+**`Slot`** — A single position on a tile stand. Holds a `Wire` (or `None` in calculator mode), a `SlotState`, and an optional `info_token` value. Additional indicator token metadata fields: `parity` (Parity enum for even/odd tokens), `multiplicity` (Multiplicity enum for x1/x2/x3 tokens), `is_unsorted` (bool for X tokens), `excluded_value` (int for false info tokens), `required_color` (WireColor for color-constrained slots).
 
 **`TileStand`** — A player's wire rack. Slots are always sorted ascending by `sort_value`. Wires stay in position even after being cut. Factory methods: `from_wires()` for simulation mode, `from_string()` for quick entry from shorthand notation. Properties: `hidden_slots`, `cut_slots`, `is_empty`, `remaining_count`.
 
@@ -190,10 +199,12 @@ Constraint classes encode information from equipment cards (Label !=, Label =, G
 | `AdjacentEqual` | Two adjacent slots must have the same gameplay value | Label = (#12) |
 | `MustHaveValue` | Player must have at least one uncut wire of a specific value | General Radar "yes" (#8), failed dual cuts |
 | `MustNotHaveValue` | Player must NOT have any uncut wire of a specific value | General Radar "no" (#8) |
+| `SlotParity` | A slot is known to be even or odd | Even/odd indicator tokens |
+| `ValueMultiplicity` | Wire value appears exactly N times on this stand | x1/x2/x3 indicator tokens |
+| `UnsortedSlot` | A slot is not sorted with the rest of the stand | X indicator tokens |
+| `SlotExcludedValue` | A slot is known to NOT be a specific value | False info tokens |
 
-Future constraint stubs (defined but not yet enforced by the solver): `SlotParity` (even/odd tokens), `ValueMultiplicity` (x1/x2/x3 tokens), `UnsortedSlot` (X tokens).
-
-Constraints are stored on `GameState.slot_constraints` and added via convenience methods: `add_adjacent_equal()`, `add_adjacent_not_equal()`, `add_must_have()`, `add_must_not_have()`. The solver (`compute_probabilities.py`) enforces `AdjacentNotEqual`, `AdjacentEqual`, `MustHaveValue`, and `MustNotHaveValue` constraints during both exact and Monte Carlo solving.
+Constraints are stored on `GameState.slot_constraints` and added via convenience methods: `add_adjacent_equal()`, `add_adjacent_not_equal()`, `add_must_have()`, `add_must_not_have()`. The solver (`compute_probabilities.py`) enforces all constraint types during both exact and Monte Carlo solving. Indicator token constraints (`SlotParity`, `ValueMultiplicity`, `UnsortedSlot`, `SlotExcludedValue`) are auto-generated from `Slot` metadata fields when using `from_partial_state()` with extended token notation.
 
 ### Action Records
 
@@ -392,8 +403,24 @@ Create a tile stand from shorthand string notation for quick mid-game entry. Eac
 | `iN` | INFO_REVEALED | Blue info token from failed dual cut | `i5` → info blue-5 |
 | `iY` | INFO_REVEALED | Yellow info token from failed dual cut | `iY` → info yellow |
 | `iYN` | INFO_REVEALED | Yellow info token, observer knows exact wire | `iY4` → info yellow-4 |
+| `!N` | HIDDEN | False info: slot is NOT value N | `!3` → hidden, not blue-3 |
+| `!N?M` | HIDDEN | False info with god-mode wire | `!3?5` → hidden blue-5, not blue-3 |
+| `E` | HIDDEN | Even parity token (value unknown) | `E` → hidden, even wire |
+| `E?N` | HIDDEN | Even parity with god-mode wire | `E?4` → hidden blue-4, even |
+| `O` | HIDDEN | Odd parity token (value unknown) | `O` → hidden, odd wire |
+| `O?N` | HIDDEN | Odd parity with god-mode wire | `O?5` → hidden blue-5, odd |
+| `1x` | HIDDEN | x1 multiplicity token (value unknown) | `1x` → hidden, unique value |
+| `2xN` | CUT | x2 multiplicity with cut wire | `2x7` → cut blue-7, appears twice |
+| `2x?N` | HIDDEN | x2 multiplicity with god-mode wire | `2x?7` → hidden blue-7, appears twice |
+| `2xYN` | CUT | x2 multiplicity with cut yellow wire | `2xY4` → cut yellow-4, appears twice |
+| `X` | HIDDEN | Unsorted X token (value unknown) | `X` → hidden, unsorted |
+| `XN` | CUT | Unsorted with cut wire | `X5` → cut blue-5, unsorted |
+| `X?N` | HIDDEN | Unsorted with god-mode wire | `X?5` → hidden blue-5, unsorted |
+| `b?` | HIDDEN | Color-constrained blue (value unknown) | `b?` → hidden, known blue |
+| `y?` | HIDDEN | Color-constrained yellow (value unknown) | `y?` → hidden, known yellow |
+| `r?` | HIDDEN | Color-constrained red (value unknown) | `r?` → hidden, known red |
 
-All prefixes (`Y`, `R`, `i`, `?`) are case-insensitive.
+All prefixes (`Y`, `R`, `i`, `?`) are case-insensitive. Color prefixes (`b`, `y`, `r`) can be combined with indicator tokens (e.g., `bE?4`, `rX?5`). Even/odd tokens cannot be combined with yellow or red wires. Multiplicity tokens cannot be combined with red wires.
 
 **Examples:**
 
@@ -470,6 +497,61 @@ game = bomb_busters.GameState.from_partial_state(
 
 ---
 
+## Missions (`missions.py`)
+
+Static mission definitions for missions 1-30. Each mission specifies wire configuration, equipment availability, indicator token system, and special rules. Missions are reference data — they describe game setup but do not manage game state.
+
+### Enums
+
+| Enum | Values | Description |
+|------|--------|-------------|
+| `IndicatorTokenType` | INFO, EVEN_ODD, MULTIPLICITY | Which indicator token system a mission uses. INFO is standard numbered 1-12. |
+| `IndicationRule` | STANDARD, RANDOM_TOKEN, CAPTAIN_FAKE, SKIP, NEGATIVE | How the indication phase works during setup. |
+
+### Equipment Catalog
+
+**`EquipmentCard`** (frozen dataclass) — Static definition of an equipment card. Fields: `card_id` (str), `name`, `description`, `unlock_value` (int), `is_double` (bool). This is reference data, not a game-state object.
+
+**`EQUIPMENT_CATALOG`** — Dict mapping card ID strings to `EquipmentCard` objects. Contains 18 entries: standard `"1"`-`"12"`, yellow `"Y"`, and double-numbered `"2.2"`, `"3.3"`, `"9.9"`, `"10.10"`, `"11.11"`.
+
+**`get_equipment(card_id)`** — Look up an equipment card by ID. Raises `ValueError` if not found.
+
+### Mission Dataclass
+
+**`Mission`** (frozen dataclass) — A mission configuration with sensible defaults. Key fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `number` | `int` | *(required)* | Mission number (1-66) |
+| `name` | `str` | *(required)* | Mission name |
+| `blue_wire_range` | `tuple[int, int]` | `(1, 12)` | Blue wire values in play (4 copies each) |
+| `yellow_wires` | `int \| tuple[int, int] \| None` | `None` | Yellow wire specification (matches `create_game()` signature) |
+| `red_wires` | `int \| tuple[int, int] \| None` | `None` | Red wire specification |
+| `equipment_forbidden` | `tuple[str, ...]` | `()` | Equipment IDs removed from the default pool |
+| `equipment_override` | `tuple[str, ...] \| None` | `None` | If set, replaces the default pool entirely |
+| `indicator_type` | `IndicatorTokenType` | `INFO` | Which indicator token system is used |
+| `indication_rule` | `IndicationRule` | `STANDARD` | How the indication phase works |
+| `x_tokens` | `bool` | `False` | Whether X tokens mark unsorted wires |
+| `double_detector_disabled` | `bool` | `False` | Disable all players' Double Detectors |
+| `number_cards` | `bool` | `False` | Whether number cards are used |
+| `timer_minutes` | `int \| None` | `None` | Optional time limit |
+| `notes` | `str` | `""` | Free-text special rules |
+
+**`available_equipment()`** — Computes equipment card IDs available for this mission. Default pool is inferred from mission number: missions 1-2 get no equipment, mission 3 gets 1-10, missions 4+ get 1-12, missions 9+ add yellow equipment (if yellow wires are present), missions 55+ add double-numbered equipment. `equipment_forbidden` removes IDs from the default; `equipment_override` replaces the default entirely.
+
+**`wire_config()`** — Returns wire configuration as a dict with keys matching `GameState.from_partial_state()` parameter names (`blue_wires`, `yellow_wires`, `red_wires`). Only includes non-default values.
+
+### Mission Registry
+
+**`MISSIONS`** — Dict mapping mission number (int) to `Mission` objects. Contains missions 1-30.
+
+| Function | Description |
+|----------|-------------|
+| `get_mission(number)` | Look up a mission by number. Raises `ValueError` if not defined. |
+| `all_missions()` | Return all defined missions sorted by number. |
+
+---
+
 ## Probability Engine (`compute_probabilities.py`)
 
 ### Knowledge Extraction
@@ -484,7 +566,7 @@ game = bomb_busters.GameState.from_partial_state(
 
 The exact solver uses composition-based enumeration with memoization at player boundaries to compute precise probability distributions. See [EXACT_SOLVER.md](EXACT_SOLVER.md) for the full algorithm documentation.
 
-**`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions). Supports a `required_color` field for slots where the wire color is known but the exact identity is not (e.g., yellow info tokens in calculator mode).
+**`PositionConstraint`** — Defines valid `sort_value` bounds for a hidden slot based on known neighboring wires (from cut or info-revealed positions). Supports additional constraint fields: `required_color` (wire color filter, e.g., yellow info tokens), `required_parity` (even/odd filter from parity tokens), `excluded_values` (frozenset of values the wire cannot be, from false info tokens), `is_unsorted` (X token positions get wide bounds and don't constrain neighbors).
 
 **`SolverContext`** — Immutable context built once per game-state + active player via `build_solver()`. Contains position constraints grouped by player, player processing order (widest bounds first for optimal memoization), distinct wire types, and must-have deductions.
 
@@ -551,5 +633,9 @@ At game start, each player indicates one blue wire by placing an info token on i
 |----------|-------------|
 | `rank_indications(game, player_index)` | Rank all blue hidden wires by information gain (Shannon entropy reduction), sorted descending. The top choice is the recommended indication. |
 | `print_indication_analysis(game, player_index)` | Print a colored terminal report showing the player's stand, baseline entropy, and ranked indication choices with information gain in bits and percentage of uncertainty resolved. |
+| `rank_indications_parity(game, player_index)` | Rank indication choices when using even/odd parity tokens. Reveals only whether the wire is even or odd — not its exact value. Information gains are lower than standard indication. |
+| `print_indication_analysis_parity(game, player_index)` | Print a colored terminal report for parity indication choices, showing parity label (E/O) and actual value. |
 
 The metric uses a dedicated single-stand two-pass DP solver. For each candidate indication, it simulates revealing the wire (tightening sort-value bounds on neighbors), then measures how much the total per-position entropy decreases. See [INDICATION_QUALITY.md](INDICATION_QUALITY.md) for the full information-theoretic foundation.
+
+**Parity indication semantics**: With even/odd tokens, the indicated slot stays HIDDEN (only parity is revealed, not the exact value). The wire is NOT removed from the pool. Neighbors do NOT get tighter sort-value bounds. The only new information is a `required_parity` constraint on the indicated position, which filters out wires of the wrong parity. Since parity reveals strictly less information than standard indication, information gains are always lower.
