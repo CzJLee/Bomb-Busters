@@ -67,7 +67,7 @@ Compute `f[d][pi]` — the total combinatorial weight of valid compositions that
 
 $$f[d][\pi] = \sum_{k=0}^{k_{\max}} \binom{c_d}{k} \cdot f[d{+}1][\pi{+}k]$$
 
-where $k_{\max} = \min(c_d, N - \pi, \text{max\_run}[d][\pi])$ and `max_run` prunes impossible placements.
+where $k_{\max} = \min(c_d, N - \pi, R[d][\pi])$ and $R$ is the `max_run` table that prunes impossible placements.
 
 If `f[0][0] == 0`, no valid composition exists for this player with the current pool — the sample is a dead end (this is extremely rare with guided sampling, but can happen due to must-have constraint interactions).
 
@@ -91,7 +91,7 @@ The per-player backward-guided sampling guarantees valid compositions for each p
 
 To correct for this, each sample's weight is the **product of per-player normalization constants** — the `f[0][0]` values from each player's backward DP table:
 
-$$w_s = \prod_{p \in \text{player\_order}} f_p[0][0]$$
+$$w_s = \prod_{p} f_p[0][0]$$
 
 This implements **self-normalized importance sampling**. The intuition: `f_p[0][0]` measures the total number of valid completions for player `p` given the pool at the time player `p` is processed. A larger value means more valid options were available, so that sample is more "representative" of the true distribution. The product across all players captures the joint feasibility.
 

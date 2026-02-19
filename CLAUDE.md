@@ -8,6 +8,7 @@ See @docs/Bomb Busters Rulebook.pdf for the official published PDF rulebook of t
 
 - Always assume a 5-player count in examples unless otherwise specified.
 - Use Google Python Style Guide imports: `import module` only, never `from module import Class`. This applies to both project modules and standard library (e.g., `import dataclasses` not `from dataclasses import dataclass`).
+- **LaTeX in markdown**: When writing or updating markdown docs with LaTeX math (`$...$` or `$$...$$`), never use escaped underscores (`\_`) inside `\text{}` blocks — this causes GitHub's KaTeX renderer to show `'_' allowed only in math mode` errors. Instead, use proper LaTeX subscript syntax (e.g., `k_{\max}` not `\text{max\_k}`) or move variable names with underscores out of math mode into backtick code spans.
 
 ## Project Overview
 
