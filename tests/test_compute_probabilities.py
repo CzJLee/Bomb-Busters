@@ -5954,8 +5954,8 @@ class TestMultiplicityIndicationQuality(unittest.TestCase):
                 f"Choices not sorted at index {i}",
             )
 
-    def test_multiplicity_skips_non_blue(self) -> None:
-        """Only blue wires should appear in multiplicity indication choices."""
+    def test_multiplicity_allows_yellow_skips_red(self) -> None:
+        """Yellow wires should appear in multiplicity choices, red skipped."""
         yellow = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)
         red = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
         alice = bomb_busters.TileStand.from_wires([
@@ -5983,9 +5983,13 @@ class TestMultiplicityIndicationQuality(unittest.TestCase):
         choices = compute_probabilities.rank_indications_multiplicity(
             game, player_index=0,
         )
-        for choice in choices:
-            self.assertEqual(choice.wire.color, bomb_busters.WireColor.BLUE)
-        self.assertEqual(len(choices), 5)
+        # Yellow wires are allowed, red wires are skipped
+        colors = {c.wire.color for c in choices}
+        self.assertIn(bomb_busters.WireColor.BLUE, colors)
+        self.assertIn(bomb_busters.WireColor.YELLOW, colors)
+        self.assertNotIn(bomb_busters.WireColor.RED, colors)
+        # 5 blue + 1 yellow = 6 candidates
+        self.assertEqual(len(choices), 6)
 
     def test_multiplicity_raises_on_unknown_wires(self) -> None:
         """Should raise ValueError if player has unknown wires."""

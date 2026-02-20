@@ -6,7 +6,8 @@ wire to indicate when the mission uses multiplicity tokens instead of
 standard info tokens.
 
 Multiplicity tokens can be used with yellow wires (unlike even/odd
-tokens). This simulation uses blue wires only (1-12) for simplicity.
+tokens). This simulation includes 3 yellow wires and 1 red wire to
+verify colored wire compatibility.
 
 Each player's multiplicity indication analysis is timed and compared
 against what the standard info token analysis would recommend.
@@ -37,7 +38,7 @@ def main() -> None:
     print(f"{_C.BOLD}Multiplicity Token Indication Simulation{_C.RESET}")
     print(f"{_C.BOLD}{'=' * 60}{_C.RESET}")
     print()
-    print("  Mission: 48 blue wires (1-12)")
+    print("  Mission: 48 blue (1-12) + 3 yellow + 1 red")
     print("  Indicator type: x1/x2/x3 multiplicity tokens")
     print("  Players: Alice (captain), Bob, Charlie, Diana, Eve")
     print()
@@ -46,6 +47,8 @@ def main() -> None:
     game = bomb_busters.GameState.create_game(
         player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
         seed=42,
+        yellow_wires=3,
+        red_wires=1,
     )
 
     # Show initial game state (god mode — all wires visible)
@@ -86,7 +89,6 @@ def main() -> None:
             mul_best = mult_choices[0]
             std_best = standard_choices[0]
             mul_val = mul_best.wire.gameplay_value
-            assert isinstance(mul_val, int)
             total_on_stand = sum(
                 1 for s in game.players[player_index].tile_stand.slots
                 if s.wire is not None
@@ -135,20 +137,20 @@ def main() -> None:
             stand.place_info_token(best.slot_index, best.wire.gameplay_value)
             letter = chr(ord("A") + best.slot_index)
             val = best.wire.gameplay_value
-            assert isinstance(val, int)
             total_on_stand = sum(
                 1 for s in stand.slots
                 if s.wire is not None
                 and s.wire.gameplay_value == val
             )
+            val_label = "Y" if val == "YELLOW" else str(val)
             print(
                 f"  {_C.GREEN}{_C.BOLD}→ Indicated"
                 f" x{total_on_stand} at"
-                f" [{letter}] (actual: {val}){_C.RESET}"
+                f" [{letter}] (actual: {val_label}){_C.RESET}"
             )
         else:
             print(
-                f"  {_C.DIM}No blue wires to indicate.{_C.RESET}"
+                f"  {_C.DIM}No wires to indicate.{_C.RESET}"
             )
         print()
 

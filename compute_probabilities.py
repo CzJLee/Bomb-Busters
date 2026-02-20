@@ -3448,6 +3448,232 @@ def _compute_entropy(
     return total_entropy
 
 
+def _compute_joint_entropy(
+    constraints: list[PositionConstraint],
+    distinct_wires: list[bomb_busters.Wire],
+    pool_counts: tuple[int, ...],
+) -> float:
+    """Compute true joint Shannon entropy of a stand configuration.
+
+    Unlike ``_compute_entropy()`` which sums per-position marginal
+    entropies (an upper bound), this computes the exact joint entropy
+    using the **entropy semiring** technique applied to the same
+    backward DP as ``_enumerate_stand_distributions()``.
+
+    The entropy semiring tracks two quantities per DP state:
+
+    - ``f[d][pi]``: total weight of valid completions (same as before)
+    - ``e[d][pi]``: Σ w_c · log₂(w_c) over all completions from that
+      state, where w_c = ∏ C(c_d, k_d) is each composition's weight
+
+    The recurrence for e is:
+
+        e[d][pi] = Σ_k C(c_d,k) · [log₂(C(c_d,k)) · f[d+1][pi+k]
+                                     + e[d+1][pi+k]]
+
+    This follows from w_c = C(c_d,k) · w_rest, so
+    w_c · log₂(w_c) = C(c_d,k) · w_rest · [log₂(C(c_d,k)) + log₂(w_rest)]
+
+    The joint entropy is then: H = log₂(W) - e[0][0] / W, where
+    W = f[0][0].
+
+    Since conditioning can only reduce joint entropy, information gain
+    computed from joint entropy is always non-negative.
+
+    Complexity: O(D × N × max_k) — same as
+    ``_enumerate_stand_distributions()``. Only needs the backward pass
+    (no forward pass), since the scalar entropy requires only f[0][0]
+    and e[0][0].
+
+    Reference: Li & Eisner, "First- and Second-Order Expectation
+    Semirings with Applications to Minimum-Risk Training on Translation
+    Forests" (EMNLP 2009).
+
+    Args:
+        constraints: Position constraints for hidden slots.
+        distinct_wires: Sorted list of unique wire types in the pool.
+        pool_counts: Tuple of available counts for each distinct wire
+            type.
+
+    Returns:
+        Joint entropy in bits. Returns 0.0 if no valid compositions
+        exist.
+    """
+    num_pos = len(constraints)
+    num_types = len(distinct_wires)
+
+    if num_pos == 0:
+        return 0.0
+
+    # Precompute max_run
+    max_run: list[list[int]] = []
+    for w in distinct_wires:
+        runs = [0] * (num_pos + 1)
+        for pi in range(num_pos - 1, -1, -1):
+            if constraints[pi].wire_fits(w):
+                runs[pi] = runs[pi + 1] + 1
+            else:
+                runs[pi] = 0
+        max_run.append(runs)
+
+    # ── Backward pass (entropy semiring) ──────────────────────
+    # f[d][pi] = total weight of completions from (d, pi)
+    # e[d][pi] = Σ_{completions c} w_c · log₂(w_c)
+    f = [[0] * (num_pos + 1) for _ in range(num_types + 1)]
+    e = [[0.0] * (num_pos + 1) for _ in range(num_types + 1)]
+    f[num_types][num_pos] = 1  # w=1, and 1·log₂(1)=0
+
+    for d in range(num_types - 1, -1, -1):
+        for pi in range(num_pos, -1, -1):
+            f_sum = 0
+            e_sum = 0.0
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            for k in range(max_k + 1):
+                coeff = math.comb(pool_counts[d], k)
+                f_next = f[d + 1][pi + k]
+                e_next = e[d + 1][pi + k]
+                f_sum += coeff * f_next
+                # e contribution: C·log₂(C)·f_next + C·e_next
+                if coeff > 1:
+                    e_sum += coeff * (
+                        math.log2(coeff) * f_next + e_next
+                    )
+                else:
+                    # coeff == 1 (k=0 or k=c_d), log₂(1)=0
+                    e_sum += e_next
+            f[d][pi] = f_sum
+            e[d][pi] = e_sum
+
+    W = f[0][0]
+    if W == 0:
+        return 0.0
+
+    # H = log₂(W) - (1/W) · Σ w · log₂(w)
+    return math.log2(W) - e[0][0] / W
+
+
+def _compute_joint_entropy_multiplicity(
+    constraints: list[PositionConstraint],
+    distinct_wires: list[bomb_busters.Wire],
+    pool_counts: tuple[int, ...],
+    indicated_pos: int,
+    hidden_target: int,
+    target_gameplay_value: int | str,
+    known_value_count: int = 0,
+) -> tuple[float, int]:
+    """Compute true joint entropy with a multiplicity constraint.
+
+    Like ``_compute_joint_entropy()`` but only counts compositions
+    where the target gameplay value appears exactly ``hidden_target``
+    times among hidden positions on the stand.
+
+    Uses the entropy semiring DP with an extra dimension tracking the
+    count of target-value wires placed so far.
+
+    Complexity: O(D × N × max_k × (hidden_target + 1)). With typical
+    values D ≈ 12, N ≈ 10, max_k ≤ 4, hidden_target ≤ 4, this
+    completes in microseconds.
+
+    Args:
+        constraints: Position constraints for hidden slots.
+        distinct_wires: Sorted list of unique wire types in the pool.
+        pool_counts: Tuple of available counts per wire type.
+        indicated_pos: Position index of the indicated slot.
+        hidden_target: Required hidden count of target gameplay value.
+        target_gameplay_value: The gameplay value being constrained.
+        known_value_count: Already-visible copies on the stand.
+
+    Returns:
+        A tuple of (joint_entropy, total_weight). Returns (0.0, 0) if
+        no valid compositions exist.
+    """
+    num_pos = len(constraints)
+    num_types = len(distinct_wires)
+
+    if num_pos == 0 or hidden_target < 0:
+        return 0.0, 0
+
+    # Identify target wire types
+    is_target = [
+        distinct_wires[d].gameplay_value == target_gameplay_value
+        for d in range(num_types)
+    ]
+
+    # Precompute max_run (non-target types cannot occupy indicated_pos)
+    max_run: list[list[int]] = []
+    for d in range(num_types):
+        w = distinct_wires[d]
+        runs = [0] * (num_pos + 1)
+        for pi in range(num_pos - 1, -1, -1):
+            if not constraints[pi].wire_fits(w):
+                runs[pi] = 0
+            elif not is_target[d] and pi == indicated_pos:
+                runs[pi] = 0
+            else:
+                runs[pi] = runs[pi + 1] + 1
+        max_run.append(runs)
+
+    max_c = hidden_target
+
+    # ── Backward pass (entropy semiring + count tracking) ─────
+    # f[d][pi][c] = total weight of completions from (d, pi) that
+    #   place exactly c more target-type wires in positions pi..N-1
+    # e[d][pi][c] = Σ w · log₂(w) for those same completions
+    f = [
+        [[0] * (max_c + 1) for _ in range(num_pos + 1)]
+        for _ in range(num_types + 1)
+    ]
+    e = [
+        [[0.0] * (max_c + 1) for _ in range(num_pos + 1)]
+        for _ in range(num_types + 1)
+    ]
+    f[num_types][num_pos][0] = 1
+
+    for d in range(num_types - 1, -1, -1):
+        for pi in range(num_pos, -1, -1):
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            if is_target[d]:
+                for c in range(max_c + 1):
+                    f_sum = 0
+                    e_sum = 0.0
+                    for k in range(min(max_k, c) + 1):
+                        coeff = math.comb(pool_counts[d], k)
+                        f_next = f[d + 1][pi + k][c - k]
+                        e_next = e[d + 1][pi + k][c - k]
+                        f_sum += coeff * f_next
+                        if coeff > 1:
+                            e_sum += coeff * (
+                                math.log2(coeff) * f_next + e_next
+                            )
+                        else:
+                            e_sum += e_next
+                    f[d][pi][c] = f_sum
+                    e[d][pi][c] = e_sum
+            else:
+                for c in range(max_c + 1):
+                    f_sum = 0
+                    e_sum = 0.0
+                    for k in range(max_k + 1):
+                        coeff = math.comb(pool_counts[d], k)
+                        f_next = f[d + 1][pi + k][c]
+                        e_next = e[d + 1][pi + k][c]
+                        f_sum += coeff * f_next
+                        if coeff > 1:
+                            e_sum += coeff * (
+                                math.log2(coeff) * f_next + e_next
+                            )
+                        else:
+                            e_sum += e_next
+                    f[d][pi][c] = f_sum
+                    e[d][pi][c] = e_sum
+
+    W = f[0][0][hidden_target]
+    if W == 0:
+        return 0.0, 0
+
+    return math.log2(W) - e[0][0][hidden_target] / W, W
+
+
 def _enumerate_stand_distributions_multiplicity(
     constraints: list[PositionConstraint],
     distinct_wires: list[bomb_busters.Wire],
@@ -3712,12 +3938,13 @@ def rank_indications(
     distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     pool_counts = tuple(pool_counter[w] for w in distinct)
 
-    # Compute baseline entropy (all positions hidden)
+    # Compute baseline entropy (all positions hidden).
+    # Uses true joint entropy (not sum of marginals) so that
+    # information gain is always non-negative.
     baseline_constraints = _build_indication_constraints(stand.slots)
-    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+    baseline_entropy = _compute_joint_entropy(
         baseline_constraints, distinct, pool_counts,
     )
-    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
 
     # Evaluate each possible indication
     choices: list[IndicationChoice] = []
@@ -3762,10 +3989,9 @@ def rank_indications(
         after_constraints = _build_indication_constraints(
             stand.slots, indicate_slot=s_idx,
         )
-        after_dist, after_weight = _enumerate_stand_distributions(
+        after_entropy = _compute_joint_entropy(
             after_constraints, after_distinct, after_pool_counts,
         )
-        after_entropy = _compute_entropy(after_dist, after_weight)
 
         ig = baseline_entropy - after_entropy
         resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
@@ -3860,12 +4086,12 @@ def rank_indications_parity(
     distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     pool_counts = tuple(pool_counter[w] for w in distinct)
 
-    # Baseline entropy (all positions hidden, no parity constraints)
+    # Baseline entropy (all positions hidden, no parity constraints).
+    # Uses true joint entropy so information gain is always non-negative.
     baseline_constraints = _build_indication_constraints(stand.slots)
-    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+    baseline_entropy = _compute_joint_entropy(
         baseline_constraints, distinct, pool_counts,
     )
-    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
 
     # Evaluate each possible parity indication.
     # Deduplicate by (slot_index, parity): two wires of the same
@@ -3900,10 +4126,9 @@ def rank_indications_parity(
             indicate_slot=s_idx,
             indicate_parity=parity,
         )
-        after_dist, after_weight = _enumerate_stand_distributions(
+        after_entropy = _compute_joint_entropy(
             after_constraints, distinct, pool_counts,
         )
-        after_entropy = _compute_entropy(after_dist, after_weight)
 
         ig = baseline_entropy - after_entropy
         resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
@@ -4005,12 +4230,12 @@ def rank_indications_multiplicity(
     distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
     pool_counts = tuple(pool_counter[w] for w in distinct)
 
-    # Baseline entropy (all positions hidden, no multiplicity constraints)
+    # Baseline entropy (all positions hidden, no multiplicity constraints).
+    # Uses true joint entropy so information gain is always non-negative.
     baseline_constraints = _build_indication_constraints(stand.slots)
-    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+    baseline_entropy = _compute_joint_entropy(
         baseline_constraints, distinct, pool_counts,
     )
-    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
 
     # Precompute known value counts on this stand (CUT/INFO_REVEALED)
     known_counts: dict[int | str, int] = {}
@@ -4053,11 +4278,12 @@ def rank_indications_multiplicity(
             continue
         if slot.wire is None:
             continue
-        if slot.wire.color != bomb_busters.WireColor.BLUE:
+        # Multiplicity tokens work with blue and yellow wires.
+        # Red wires cannot be indicated with multiplicity tokens.
+        if slot.wire.color == bomb_busters.WireColor.RED:
             continue
 
         value = slot.wire.gameplay_value
-        assert isinstance(value, int)
 
         # Count total copies of this value on the stand (hidden + known)
         total_on_stand = sum(
@@ -4079,8 +4305,13 @@ def rank_indications_multiplicity(
         # could be at the indicated position and satisfy the multiplicity
         # constraint (V' appears exactly M times total on the stand).
         required_mult = total_on_stand  # xM token value
-        merged_dist: dict[int, collections.Counter[bomb_busters.Wire]] = {}
+
+        # Compute joint entropy by summing w*log2(w) across all
+        # gameplay values V' that could fit. The sub-calls for each V'
+        # produce mutually exclusive composition sets, so:
+        # H_merged = log2(W_total) - (1/W_total) * Σ_V' Σ_c w_c*log2(w_c)
         merged_weight = 0
+        merged_wlog = 0.0  # Σ w * log2(w) across all V' sub-calls
 
         for gv in possible_gvs_at_pos[indicated_pos]:
             gv_known = known_counts.get(gv, 0)
@@ -4090,20 +4321,27 @@ def rank_indications_multiplicity(
             if gv_hidden_target > pool_count_by_gv.get(gv, 0):
                 continue
 
-            dist_v, weight_v = _enumerate_stand_distributions_multiplicity(
+            entropy_v, weight_v = _compute_joint_entropy_multiplicity(
                 baseline_constraints, distinct, pool_counts,
                 indicated_pos=indicated_pos,
-                required_multiplicity=required_mult,
-                known_value_count=gv_known,
+                hidden_target=gv_hidden_target,
                 target_gameplay_value=gv,
+                known_value_count=gv_known,
             )
-            merged_weight += weight_v
-            for pos_idx, counter in dist_v.items():
-                if pos_idx not in merged_dist:
-                    merged_dist[pos_idx] = collections.Counter()
-                merged_dist[pos_idx] += counter
+            if weight_v > 0:
+                # Recover Σ w*log2(w) from entropy_v:
+                # entropy_v = log2(W_v) - wlog_v / W_v
+                # => wlog_v = W_v * (log2(W_v) - entropy_v)
+                wlog_v = weight_v * (math.log2(weight_v) - entropy_v)
+                merged_wlog += wlog_v
+                merged_weight += weight_v
 
-        after_entropy = _compute_entropy(merged_dist, merged_weight)
+        if merged_weight > 0:
+            after_entropy = (
+                math.log2(merged_weight) - merged_wlog / merged_weight
+            )
+        else:
+            after_entropy = 0.0
 
         ig = baseline_entropy - after_entropy
         resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
@@ -4630,7 +4868,7 @@ def print_indication_analysis_multiplicity(
     choices = rank_indications_multiplicity(game, player_index)
 
     if not choices:
-        print(f"  {_C.DIM}No blue wires available to indicate.{_C.RESET}")
+        print(f"  {_C.DIM}No wires available to indicate.{_C.RESET}")
         return
 
     # Show baseline entropy
@@ -4646,7 +4884,6 @@ def print_indication_analysis_multiplicity(
     for i, choice in enumerate(choices, 1):
         letter = _slot_letter(choice.slot_index)
         value = choice.wire.gameplay_value
-        assert isinstance(value, int)
 
         # Count total copies of this value on the stand
         total_on_stand = sum(
@@ -4658,16 +4895,15 @@ def print_indication_analysis_multiplicity(
 
         ig = choice.information_gain
         pct = choice.uncertainty_resolved
-        # Multiplicity indication thresholds — calibrated from 500
-        # random 5-player games (all choices, n=24000). Multiplicity
-        # reveals only xM count, so IG is lower than standard or
-        # parity. Distribution is heavily skewed (22% negative values
-        # from sum-of-marginals entropy artifact), so percentile-based
-        # thresholds are used instead of mean±σ.
+        # Multiplicity indication thresholds. Multiplicity reveals
+        # only xM count (not value), so IG is lower than standard
+        # or parity. With true joint entropy, all IG values are
+        # non-negative. Thresholds need recalibration with joint
+        # entropy — these are conservative placeholders.
         #   Green:  ≥ 5%   (excellent)
         #   Blue:   ≥ 3.5% (good)
         #   Yellow: ≥ 1%   (moderate)
-        #   Red:    < 1%   (poor, includes negative IG)
+        #   Red:    < 1%   (poor)
         if pct >= 0.05:
             ig_str = f"{_C.GREEN}{_C.BOLD}{ig:>5.2f}{_C.RESET}"
         elif pct >= 0.035:
@@ -4679,10 +4915,11 @@ def print_indication_analysis_multiplicity(
 
         pct_str = f"{pct:.1%}"
 
+        val_display = _value_label(value)
         print(
             f"  {i:>2}. {ig_str} bits  "
             f"[{_C.BOLD}{letter}{_C.RESET}] "
             f"{mult_color}{mult_label}{_C.RESET}"
-            f"  {_C.DIM}(actual: {value}, {pct_str} resolved){_C.RESET}"
+            f"  {_C.DIM}(actual: {val_display}{_C.DIM}, {pct_str} resolved){_C.RESET}"
         )
     print()
