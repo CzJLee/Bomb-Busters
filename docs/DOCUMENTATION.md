@@ -76,8 +76,11 @@ The game state is printed to the terminal with ANSI color coding.
 
 ```
 === Bomb Busters ===
+Mission 8: FINAL EXAM
 Mistakes remaining: 3
 ```
+
+When a mission is set, the mission number and name are shown below the title in dim text. When no mission is set, this line is omitted.
 
 **Mistakes remaining** shows how many more failed dual cuts the team can survive before the bomb explodes. Starts at N-1 for N players (e.g., 4 for a 5-player game). When it reaches 0, one more mistake ends the game.
 
@@ -254,8 +257,9 @@ Create a new game in full simulation mode. Shuffles all wires, deals them evenly
 | `player_names` | `list[str]` | Names of the players. Must be 4-5 players. |
 | `seed` | `int \| None` | Optional random seed for reproducible shuffles. |
 | `captain` | `int` | Player index of the captain. Defaults to `0`. |
-| `yellow_wires` | `int \| tuple[int, int] \| None` | Yellow wire specification. `None` (default) = no yellow wires. `2` = include 2 randomly selected yellow wires (KNOWN markers). `(2, 3)` = draw 3 random yellow wires, keep 2 (UNCERTAIN markers on all 3 drawn). |
+| `yellow_wires` | `int \| tuple[int, int] \| None` | Yellow wire specification. `None` (default) = no yellow wires. `2` = include 2 randomly selected yellow wires (KNOWN markers). `(2, 3)` = draw 3 random yellow wires, keep 2 (UNCERTAIN markers on all 3 drawn). When `_UNSET` (the internal default) and a `mission` is provided, inherits from the mission. |
 | `red_wires` | `int \| tuple[int, int] \| None` | Red wire specification. Same semantics as `yellow_wires`. |
+| `mission` | `Mission \| int \| None` | Optional mission to initialize from. Can be a `Mission` object or an `int` (mission number). When provided: blue wire range, yellow/red wire config, equipment, and DD disabled flags are inherited from the mission. Explicit `yellow_wires`/`red_wires` (including explicit `None`) override the mission's config. |
 
 **Returns:** A fully initialized `GameState` with all wires dealt and sorted.
 
@@ -288,6 +292,21 @@ game = bomb_busters.GameState.create_game(
     yellow_wires=(3, 6),
 )
 
+# Create game from a mission definition (inherits wire config, equipment, etc.)
+game = bomb_busters.GameState.create_game(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    mission=8,  # FINAL EXAM: blue 1-12, 2-of-3 yellow, 1-of-2 red
+    seed=42,
+)
+
+# Override specific wire config from mission
+game = bomb_busters.GameState.create_game(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    mission=8,
+    yellow_wires=None,  # explicitly no yellow (overrides mission's 2-of-3)
+    seed=42,
+)
+
 # Set active player perspective (Bob sees his own wires, others' hidden wires
 # are masked as '?' in display output)
 game.active_player_index = 1
@@ -313,12 +332,13 @@ Create a game state from partial mid-game information. Use this to enter an in-p
 | `blue_wires` | `list[Wire] \| tuple[int, int] \| None` | Blue wire pool. `None` (default) = all blue 1-12 (48 wires). `(low, high)` tuple = blue wires for values low through high (4 copies each). `list[Wire]` = custom wire list. |
 | `yellow_wires` | `list[int] \| tuple[list[int], int] \| None` | Yellow wire specification. `None` (default) = no yellow wires. `[4, 7]` = Y4 and Y7 definitely in play (KNOWN markers). `([2, 3, 9], 2)` = 2-of-3 uncertain (UNCERTAIN markers). |
 | `red_wires` | `list[int] \| tuple[list[int], int] \| None` | Red wire specification. Same semantics as `yellow_wires`. `[4]` = R4 definitely in play. `([3, 7], 1)` = 1-of-2 uncertain. |
+| `mission` | `Mission \| int \| None` | Optional mission to initialize from. Can be a `Mission` object or an `int` (mission number). When provided: `blue_wires` inherits from the mission's `blue_wire_range` if not explicitly passed. `yellow_wires`/`red_wires` are NOT inherited (types are incompatible — mission uses counts, `from_partial_state()` needs specific wire numbers). If the mission requires colored wires but they are not provided, a `ValueError` is raised with example usage. Equipment is NOT inherited — must be specified explicitly. |
 
 Markers and uncertain wire groups are auto-derived internally from the `blue_wires`, `yellow_wires`, and `red_wires` parameters. There is no need to construct `Marker` or `UncertainWireGroup` objects manually.
 
 **Returns:** A `GameState` initialized from the provided partial information.
 
-**Raises:** `ValueError` if the number of stands doesn't match the number of players.
+**Raises:** `ValueError` if the number of stands doesn't match the number of players, or if a mission requires colored wires that are not provided, or if provided wire counts don't match the mission's expected counts.
 
 **Examples:**
 
@@ -370,6 +390,29 @@ game = bomb_busters.GameState.from_partial_state(
     stands=[alice, bob, charlie, diana, eve],
     yellow_wires=([2, 3, 9], 2),  # 2-of-3 uncertain (UNCERTAIN markers)
     red_wires=([3, 7], 1),        # 1-of-2 uncertain (UNCERTAIN markers)
+)
+
+# Game with a mission — blue range inherited, colored wires must be explicit
+game = bomb_busters.GameState.from_partial_state(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    stands=[alice, bob, charlie, diana, eve],
+    mission=8,                         # FINAL EXAM (blue 1-12)
+    yellow_wires=([2, 3, 9], 2),       # mission 8 requires yellow wires
+    red_wires=([3, 7], 1),             # mission 8 requires red wires
+)
+
+# Mission with restricted blue range — inherited automatically
+alice_short = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+bob_short   = bomb_busters.TileStand.from_string("? ? ? ? ? ?")
+charlie_short = bomb_busters.TileStand.from_string("? ? ? ? ?")
+diana_short   = bomb_busters.TileStand.from_string("? ? ? ? ?")
+eve_short     = bomb_busters.TileStand.from_string("? ? ? ? ?")
+
+game = bomb_busters.GameState.from_partial_state(
+    player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+    stands=[alice_short, bob_short, charlie_short, diana_short, eve_short],
+    mission=1,  # TUTORIAL: blue 1-6 only (24 wires), no colored wires
+    captain=0,
 )
 ```
 
@@ -539,7 +582,7 @@ Static mission definitions for missions 1-30. Each mission specifies wire config
 
 **`available_equipment()`** — Computes equipment card IDs available for this mission. Default pool is inferred from mission number: missions 1-2 get no equipment, mission 3 gets 1-10, missions 4+ get 1-12, missions 9+ add yellow equipment (if yellow wires are present), missions 55+ add double-numbered equipment. `equipment_forbidden` removes IDs from the default; `equipment_override` replaces the default entirely.
 
-**`wire_config()`** — Returns wire configuration as a dict with keys matching `GameState.from_partial_state()` parameter names (`blue_wires`, `yellow_wires`, `red_wires`). Only includes non-default values.
+**`wire_config()`** — Returns wire configuration as a dict with keys matching `GameState.create_game()` parameter names (`blue_wires`, `yellow_wires`, `red_wires`). Values are counts or count tuples, not specific wire numbers. Only includes non-default values.
 
 ### Mission Registry
 

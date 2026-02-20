@@ -3,6 +3,7 @@
 import unittest
 
 import bomb_busters
+import missions
 
 
 class TestWire(unittest.TestCase):
@@ -3103,6 +3104,490 @@ class TestAutoConstraintGeneration(unittest.TestCase):
         ]
         self.assertEqual(len(excl_constraints), 1)
         self.assertEqual(excl_constraints[0].excluded_value, 3)
+
+
+class TestMissionIntegrationCreateGame(unittest.TestCase):
+    """Tests for mission integration with GameState.create_game()."""
+
+    def test_mission_by_number(self) -> None:
+        """Pass mission=8 (int), verify wire counts match mission config."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            seed=42,
+        )
+        # Mission 8: blue 1-12, yellow_wires=(2,3), red_wires=(1,2)
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        red_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.RED
+        ]
+        # 3 yellow drawn (uncertain), 2 red drawn (uncertain)
+        self.assertEqual(len(yellow_markers), 3)
+        self.assertEqual(len(red_markers), 2)
+        for m in yellow_markers:
+            self.assertEqual(m.state, bomb_busters.MarkerState.UNCERTAIN)
+        for m in red_markers:
+            self.assertEqual(m.state, bomb_busters.MarkerState.UNCERTAIN)
+
+    def test_mission_by_object(self) -> None:
+        """Pass mission=Mission object, same result as by number."""
+        mission_obj = missions.get_mission(8)
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=mission_obj,
+            seed=42,
+        )
+        self.assertIs(game.mission, mission_obj)
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        self.assertEqual(len(yellow_markers), 3)
+
+    def test_explicit_wires_override_mission(self) -> None:
+        """Explicit yellow_wires overrides mission's yellow config."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            yellow_wires=4,
+            seed=42,
+        )
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        # 4 known yellow wires (not 2-of-3 uncertain from mission)
+        self.assertEqual(len(yellow_markers), 4)
+        for m in yellow_markers:
+            self.assertEqual(m.state, bomb_busters.MarkerState.KNOWN)
+
+    def test_explicit_none_overrides_mission(self) -> None:
+        """Explicit yellow_wires=None overrides mission's yellow config."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            yellow_wires=None,
+            seed=42,
+        )
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        self.assertEqual(len(yellow_markers), 0)
+
+    def test_blue_wire_range_from_mission(self) -> None:
+        """Mission 1 has blue 1-6, should create only 24 blue wires."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=1,
+            seed=42,
+        )
+        blue_wires = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.BLUE
+        ]
+        self.assertEqual(len(blue_wires), 24)
+        # All blue values should be 1-6
+        blue_values = {w.base_number for w in blue_wires}
+        self.assertEqual(blue_values, {1, 2, 3, 4, 5, 6})
+
+    def test_equipment_from_mission(self) -> None:
+        """Mission 8 should create equipment cards."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            seed=42,
+        )
+        self.assertGreater(len(game.equipment), 0)
+
+    def test_equipment_count_equals_players(self) -> None:
+        """Equipment count should equal player count."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            seed=42,
+        )
+        self.assertEqual(len(game.equipment), 5)
+
+    def test_no_equipment_mission_1(self) -> None:
+        """Mission 1 has no equipment (missions 1-2 have none)."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=1,
+            seed=42,
+        )
+        self.assertEqual(len(game.equipment), 0)
+
+    def test_dd_disabled(self) -> None:
+        """Mission 27 has double_detector_disabled=True."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=27,
+            seed=42,
+        )
+        for player in game.players:
+            self.assertIsNotNone(player.character_card)
+            self.assertTrue(player.character_card.used)
+
+    def test_captain_dd_disabled(self) -> None:
+        """Mission 28 has captain_double_detector_disabled=True."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=28,
+            seed=42,
+            captain=0,
+        )
+        # Captain's DD should be used
+        self.assertTrue(game.players[0].character_card.used)
+        # Other players' DDs should be available
+        for i in range(1, 5):
+            self.assertFalse(game.players[i].character_card.used)
+
+    def test_mission_stored_on_gamestate(self) -> None:
+        """Verify game.mission is the Mission object."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            seed=42,
+        )
+        self.assertIsNotNone(game.mission)
+        self.assertEqual(game.mission.number, 8)
+        self.assertEqual(game.mission.name, "FINAL EXAM")
+
+    def test_mission_in_str_output(self) -> None:
+        """Verify str(game) contains mission name."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            mission=8,
+            seed=42,
+        )
+        output = str(game)
+        self.assertIn("Mission 8", output)
+        self.assertIn("FINAL EXAM", output)
+
+    def test_no_mission_backward_compatible(self) -> None:
+        """No mission param = exact same behavior as before."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["A", "B", "C", "D", "E"],
+            seed=42,
+        )
+        self.assertIsNone(game.mission)
+        blue_wires = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.BLUE
+        ]
+        self.assertEqual(len(blue_wires), 48)
+        self.assertEqual(len(game.equipment), 0)
+        self.assertEqual(len(game.markers), 0)
+
+    def test_invalid_mission_number(self) -> None:
+        """mission=999 raises ValueError."""
+        with self.assertRaises(ValueError):
+            bomb_busters.GameState.create_game(
+                player_names=["A", "B", "C", "D", "E"],
+                mission=999,
+            )
+
+
+class TestMissionIntegrationPartialState(unittest.TestCase):
+    """Tests for mission integration with GameState.from_partial_state()."""
+
+    def _make_stands(
+        self, pattern: str = "? ? ? ? ? ? ? ? ? ?", count: int = 5,
+    ) -> list[bomb_busters.TileStand]:
+        """Helper to create a list of identical stands."""
+        return [
+            bomb_busters.TileStand.from_string(pattern)
+            for _ in range(count)
+        ]
+
+    def test_blue_range_from_mission(self) -> None:
+        """Mission 1 has blue 1-6, should produce 24 blue wires."""
+        # Mission 1: blue 1-6, no colored wires. 24 / 5 = 4.8,
+        # so captain and next player get 5, others get 4.
+        stands = []
+        for i in range(5):
+            if i < 4:
+                stands.append(
+                    bomb_busters.TileStand.from_string("? ? ? ? ?")
+                )
+            else:
+                stands.append(
+                    bomb_busters.TileStand.from_string("? ? ? ?")
+                )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=1,
+        )
+        blue_wires = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.BLUE
+        ]
+        self.assertEqual(len(blue_wires), 24)
+        blue_values = {w.base_number for w in blue_wires}
+        self.assertEqual(blue_values, {1, 2, 3, 4, 5, 6})
+
+    def test_explicit_blue_overrides_mission(self) -> None:
+        """Explicit blue_wires overrides mission's blue range."""
+        stands = self._make_stands(
+            "? ? ? ? ? ? ? ? ? ?", count=5,
+        )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=1,  # has blue 1-6
+            blue_wires=(1, 12),  # override to full range
+            validate_stand_sizes=False,
+        )
+        blue_wires = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.BLUE
+        ]
+        self.assertEqual(len(blue_wires), 48)
+
+    def test_equipment_not_inherited(self) -> None:
+        """Equipment should NOT be inherited from mission."""
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=8,
+            yellow_wires=[2, 3],
+            red_wires=[4],
+            validate_stand_sizes=False,
+        )
+        self.assertEqual(game.equipment, [])
+
+    def test_explicit_equipment(self) -> None:
+        """Explicit equipment parameter should be used."""
+        equip = [bomb_busters.Equipment(
+            name="Test",
+            description="Test equipment",
+            unlock_value=1,
+        )]
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=8,
+            equipment=equip,
+            yellow_wires=[2, 3],
+            red_wires=[4],
+            validate_stand_sizes=False,
+        )
+        self.assertEqual(len(game.equipment), 1)
+        self.assertEqual(game.equipment[0].name, "Test")
+
+    def test_mission_requires_yellow_raises(self) -> None:
+        """Mission 8 requires yellow wires; omitting raises ValueError."""
+        stands = self._make_stands(count=5)
+        with self.assertRaises(ValueError) as ctx:
+            bomb_busters.GameState.from_partial_state(
+                player_names=["A", "B", "C", "D", "E"],
+                stands=stands,
+                mission=8,
+                red_wires=[4],
+                validate_stand_sizes=False,
+            )
+        self.assertIn("yellow", str(ctx.exception).lower())
+        self.assertIn("Mission 8", str(ctx.exception))
+
+    def test_mission_requires_red_raises(self) -> None:
+        """Mission 8 requires red wires; omitting raises ValueError."""
+        stands = self._make_stands(count=5)
+        with self.assertRaises(ValueError) as ctx:
+            bomb_busters.GameState.from_partial_state(
+                player_names=["A", "B", "C", "D", "E"],
+                stands=stands,
+                mission=8,
+                yellow_wires=[2, 3],
+                validate_stand_sizes=False,
+            )
+        self.assertIn("red", str(ctx.exception).lower())
+
+    def test_yellow_count_mismatch_raises(self) -> None:
+        """Mission expects 2 yellow, providing 3 should raise."""
+        stands = self._make_stands(count=5)
+        with self.assertRaises(ValueError) as ctx:
+            bomb_busters.GameState.from_partial_state(
+                player_names=["A", "B", "C", "D", "E"],
+                stands=stands,
+                mission=8,
+                yellow_wires=[2, 3, 9],  # 3 instead of expected 2
+                red_wires=[4],
+                validate_stand_sizes=False,
+            )
+        self.assertIn("2", str(ctx.exception))
+        self.assertIn("3", str(ctx.exception))
+
+    def test_valid_yellow_red_with_mission(self) -> None:
+        """Valid yellow and red wires with mission should succeed."""
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=8,
+            yellow_wires=[2, 3],
+            red_wires=[4],
+            validate_stand_sizes=False,
+        )
+        self.assertIsNotNone(game.mission)
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        red_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.RED
+        ]
+        self.assertEqual(len(yellow_markers), 2)
+        self.assertEqual(len(red_markers), 1)
+
+    def test_uncertain_wires_with_mission(self) -> None:
+        """Uncertain (X-of-Y) wire tuples should work with mission."""
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=8,
+            yellow_wires=([2, 3, 9], 2),  # 2-of-3 uncertain
+            red_wires=([4, 7], 1),  # 1-of-2 uncertain
+            validate_stand_sizes=False,
+        )
+        yellow_markers = [
+            m for m in game.markers
+            if m.color == bomb_busters.WireColor.YELLOW
+        ]
+        self.assertEqual(len(yellow_markers), 3)
+        for m in yellow_markers:
+            self.assertEqual(m.state, bomb_busters.MarkerState.UNCERTAIN)
+
+    def test_mission_stored(self) -> None:
+        """Verify game.mission is set from from_partial_state."""
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=8,
+            yellow_wires=[2, 3],
+            red_wires=[4],
+            validate_stand_sizes=False,
+        )
+        self.assertIsNotNone(game.mission)
+        self.assertEqual(game.mission.number, 8)
+
+    def test_no_mission_backward_compatible(self) -> None:
+        """No mission param = same behavior as before."""
+        stands = self._make_stands(count=5)
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            validate_stand_sizes=False,
+        )
+        self.assertIsNone(game.mission)
+        blue_wires = [
+            w for w in game.wires_in_play
+            if w.color == bomb_busters.WireColor.BLUE
+        ]
+        self.assertEqual(len(blue_wires), 48)
+
+    def test_mission_no_colored_wires_no_error(self) -> None:
+        """Mission 1 has no colored wires, no error when omitting them."""
+        stands = []
+        for i in range(5):
+            if i < 4:
+                stands.append(
+                    bomb_busters.TileStand.from_string("? ? ? ? ?")
+                )
+            else:
+                stands.append(
+                    bomb_busters.TileStand.from_string("? ? ? ?")
+                )
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=stands,
+            mission=1,
+        )
+        self.assertEqual(game.mission.number, 1)
+        self.assertEqual(len(game.markers), 0)
+
+
+class TestCreateEquipmentFromMission(unittest.TestCase):
+    """Tests for create_equipment_from_mission() helper."""
+
+    def test_equipment_created(self) -> None:
+        """Equipment cards are created from mission's available pool."""
+        mission_obj = missions.get_mission(8)
+        equipment = bomb_busters.create_equipment_from_mission(
+            mission_obj, player_count=5,
+        )
+        self.assertEqual(len(equipment), 5)
+        for e in equipment:
+            self.assertIsInstance(e, bomb_busters.Equipment)
+            self.assertFalse(e.used)
+            self.assertFalse(e.unlocked)
+
+    def test_equipment_limited_by_player_count(self) -> None:
+        """Equipment count is limited to player count."""
+        mission_obj = missions.get_mission(8)
+        equipment = bomb_busters.create_equipment_from_mission(
+            mission_obj, player_count=3,
+        )
+        self.assertEqual(len(equipment), 3)
+
+
+class TestValidateMissionWires(unittest.TestCase):
+    """Tests for _validate_mission_wires() helper."""
+
+    def test_no_mission_wires_no_error(self) -> None:
+        """Mission with no colored wires should not raise."""
+        mission_obj = missions.get_mission(1)
+        bomb_busters._validate_mission_wires(
+            mission_obj, None, None,
+        )
+
+    def test_missing_yellow_raises(self) -> None:
+        """Mission requiring yellow raises if not provided."""
+        mission_obj = missions.get_mission(8)
+        with self.assertRaises(ValueError):
+            bomb_busters._validate_mission_wires(
+                mission_obj, None, [4],
+            )
+
+    def test_missing_red_raises(self) -> None:
+        """Mission requiring red raises if not provided."""
+        mission_obj = missions.get_mission(8)
+        with self.assertRaises(ValueError):
+            bomb_busters._validate_mission_wires(
+                mission_obj, [2, 3], None,
+            )
+
+    def test_count_mismatch_raises(self) -> None:
+        """Wrong wire count raises ValueError."""
+        mission_obj = missions.get_mission(8)
+        with self.assertRaises(ValueError):
+            bomb_busters._validate_mission_wires(
+                mission_obj, [2, 3, 9], [4],  # 3 yellow, mission expects 2
+            )
+
+    def test_valid_counts_pass(self) -> None:
+        """Correct wire counts should not raise."""
+        mission_obj = missions.get_mission(8)
+        bomb_busters._validate_mission_wires(
+            mission_obj, [2, 3], [4],
+        )
+
+    def test_uncertain_tuple_counts_pass(self) -> None:
+        """Uncertain (tuple) wire counts should validate correctly."""
+        mission_obj = missions.get_mission(8)
+        bomb_busters._validate_mission_wires(
+            mission_obj, ([2, 3, 9], 2), ([4, 7], 1),
+        )
 
 
 if __name__ == "__main__":

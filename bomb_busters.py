@@ -12,6 +12,8 @@ import enum
 import functools
 import random
 
+import missions
+
 
 # =============================================================================
 # ANSI Color Constants
@@ -2002,6 +2004,133 @@ class UncertainWireGroup:
 
 
 # =============================================================================
+# Mission Integration Helpers
+# =============================================================================
+
+# Sentinel to distinguish "parameter not provided" from "explicitly None".
+# Used for yellow_wires/red_wires in create_game() where None means
+# "no colored wires". _UNSET means "inherit from mission if available".
+_UNSET = object()
+
+
+def _resolve_mission(
+    mission: missions.Mission | int | None,
+) -> missions.Mission | None:
+    """Resolve a mission parameter to a Mission object or None.
+
+    Args:
+        mission: A Mission object, an integer mission number, or None.
+
+    Returns:
+        The resolved Mission object, or None.
+
+    Raises:
+        ValueError: If the integer mission number is not defined.
+    """
+    if mission is None:
+        return None
+    if isinstance(mission, int):
+        return missions.get_mission(mission)
+    return mission
+
+
+def create_equipment_from_mission(
+    mission_obj: missions.Mission,
+    player_count: int,
+) -> list[Equipment]:
+    """Create Equipment game objects from a mission's available equipment.
+
+    Converts static ``EquipmentCard`` definitions from the mission
+    catalog into mutable ``Equipment`` objects for use in a game.
+    The number of equipment cards equals the number of players (per
+    game rules).
+
+    Args:
+        mission_obj: The mission to get equipment from.
+        player_count: Number of players (limits equipment count).
+
+    Returns:
+        List of Equipment objects, at most ``player_count`` items.
+    """
+    card_ids = mission_obj.available_equipment()
+    equipment: list[Equipment] = []
+    for card_id in card_ids[:player_count]:
+        card = missions.get_equipment(card_id)
+        equipment.append(Equipment(
+            name=card.name,
+            description=card.description,
+            unlock_value=card.unlock_value,
+        ))
+    return equipment
+
+
+def _validate_mission_wires(
+    mission_obj: missions.Mission,
+    yellow_wires: list[int] | tuple[list[int], int] | None,
+    red_wires: list[int] | tuple[list[int], int] | None,
+) -> None:
+    """Validate that colored wires match a mission's requirements.
+
+    Called by ``from_partial_state()`` when a mission is provided.
+    Raises ``ValueError`` if the mission requires colored wires but
+    they are not provided, or if the provided count doesn't match
+    the mission's expected count.
+
+    Args:
+        mission_obj: The mission to validate against.
+        yellow_wires: The yellow wire parameter from the caller.
+        red_wires: The red wire parameter from the caller.
+
+    Raises:
+        ValueError: If wires are missing or counts don't match.
+    """
+    for color_name, mission_spec, caller_wires in [
+        ("yellow", mission_obj.yellow_wires, yellow_wires),
+        ("red", mission_obj.red_wires, red_wires),
+    ]:
+        if mission_spec is None:
+            continue
+
+        # Determine expected count from mission spec
+        if isinstance(mission_spec, tuple):
+            expected_count, pool_size = mission_spec
+            spec_desc = (
+                f"{expected_count}-of-{pool_size} uncertain"
+            )
+        else:
+            expected_count = mission_spec
+            spec_desc = f"{expected_count} known"
+
+        if caller_wires is None:
+            raise ValueError(
+                f"Mission {mission_obj.number} ({mission_obj.name}) "
+                f"requires {color_name} wires ({spec_desc}) but "
+                f"{color_name}_wires was not provided. Pass "
+                f"{color_name}_wires explicitly, e.g.:\n"
+                f"  {color_name}_wires=([2, 3, 9], "
+                f"{expected_count})  "
+                f"# {expected_count}-of-N uncertain\n"
+                f"  {color_name}_wires=[4, 7]"
+                f"{''.join(f', {i}' for i in range(3, expected_count + 1))}"
+                f"           # {expected_count} known"
+            )
+
+        # Validate count matches
+        if isinstance(caller_wires, tuple):
+            wire_list, count = caller_wires
+            actual_count = count
+        else:
+            actual_count = len(caller_wires)
+
+        if actual_count != expected_count:
+            raise ValueError(
+                f"Mission {mission_obj.number} ({mission_obj.name}) "
+                f"expects {expected_count} {color_name} wires but "
+                f"{actual_count} were provided"
+            )
+
+
+# =============================================================================
 # GameState
 # =============================================================================
 
@@ -2039,6 +2168,8 @@ class GameState:
         slot_constraints: List of SlotConstraint objects representing
             game constraints from equipment cards, General Radar, etc.
             Used by the probability engine to prune invalid distributions.
+        mission: The Mission object this game was created from, or None
+            if no mission was specified. Stored for display and reference.
     """
     players: list[Player]
     detonator: Detonator
@@ -2057,6 +2188,7 @@ class GameState:
     slot_constraints: list[SlotConstraint] = dataclasses.field(
         default_factory=list,
     )
+    mission: missions.Mission | None = None
 
     @property
     def validation_tokens(self) -> set[int]:
@@ -2111,14 +2243,15 @@ class GameState:
         player_names: list[str],
         seed: int | None = None,
         captain: int = 0,
-        yellow_wires: int | tuple[int, int] | None = None,
-        red_wires: int | tuple[int, int] | None = None,
+        yellow_wires: int | tuple[int, int] | None | object = _UNSET,
+        red_wires: int | tuple[int, int] | None | object = _UNSET,
+        mission: missions.Mission | int | None = None,
     ) -> GameState:
         """Create a new game in full simulation mode.
 
         Shuffles all wires, deals them evenly to players, and sets up
-        the board. Always includes all 48 blue wires (1-12, 4 copies
-        each). Optionally adds yellow and/or red wires.
+        the board. Optionally accepts a mission to inherit wire
+        configuration, equipment, and character card settings.
 
         Args:
             player_names: Names of the players (4-5 players).
@@ -2126,21 +2259,29 @@ class GameState:
             captain: Player index of the captain. The captain is dealt
                 first, indicates first, and takes the first turn.
                 Defaults to 0.
-            yellow_wires: Yellow wire specification. ``None`` (default)
-                = no yellow wires. ``2`` = include 2 randomly selected
-                yellow wires (KNOWN markers). ``(2, 3)`` = draw 3
-                random yellow wires, keep 2 (UNCERTAIN markers on all
-                3 drawn).
+            yellow_wires: Yellow wire specification. Not provided
+                (default) = inherit from mission if given, otherwise
+                no yellow wires. ``None`` = no yellow wires (overrides
+                mission). ``2`` = include 2 randomly selected yellow
+                wires (KNOWN markers). ``(2, 3)`` = draw 3 random
+                yellow wires, keep 2 (UNCERTAIN markers on all 3
+                drawn).
             red_wires: Red wire specification. Same semantics as
                 ``yellow_wires``. ``1`` = include 1 random red wire.
                 ``(1, 2)`` = draw 2 random red wires, keep 1.
+            mission: Optional mission to inherit configuration from.
+                Can be a ``Mission`` object or an integer mission
+                number. Wire configuration, equipment, and character
+                card settings are inherited from the mission unless
+                explicitly overridden.
 
         Returns:
             A fully initialized GameState.
 
         Raises:
             ValueError: If player count is not 4-5, captain index
-                is out of range, or wire counts are invalid.
+                is out of range, wire counts are invalid, or mission
+                number is not defined.
         """
         if seed is not None:
             random.seed(seed)
@@ -2154,8 +2295,31 @@ class GameState:
                 f"got {captain}"
             )
 
-        # Build wire pool
-        pool: list[Wire] = create_all_blue_wires()
+        # ── Resolve mission ───────────────────────────────────
+        mission_obj = _resolve_mission(mission)
+
+        # ── Resolve wire configuration ────────────────────────
+        # _UNSET means "inherit from mission"; explicit value
+        # (including None) overrides.
+        if yellow_wires is _UNSET:
+            if mission_obj is not None:
+                yellow_wires = mission_obj.yellow_wires
+            else:
+                yellow_wires = None
+
+        if red_wires is _UNSET:
+            if mission_obj is not None:
+                red_wires = mission_obj.red_wires
+            else:
+                red_wires = None
+
+        # ── Build blue wire pool ──────────────────────────────
+        if mission_obj is not None:
+            low, high = mission_obj.blue_wire_range
+            pool: list[Wire] = create_blue_wires(low, high)
+        else:
+            pool = create_all_blue_wires()
+
         markers: list[Marker] = []
 
         for color, spec in [
@@ -2219,25 +2383,47 @@ class GameState:
             hands[p] = pool[idx:idx + count]
             idx += count
 
-        # Create players with Double Detector character cards
+        # ── Create character cards ────────────────────────────
+        dd_cards: list[CharacterCard] = []
+        for i in range(player_count):
+            card = create_double_detector()
+            if mission_obj is not None:
+                if mission_obj.double_detector_disabled:
+                    card.used = True
+                elif (
+                    mission_obj.captain_double_detector_disabled
+                    and i == captain
+                ):
+                    card.used = True
+            dd_cards.append(card)
+
+        # Create players
         players = [
             Player(
                 name=player_names[i],
                 tile_stand=TileStand.from_wires(hands[i]),
-                character_card=create_double_detector(),
+                character_card=dd_cards[i],
             )
             for i in range(player_count)
         ]
+
+        # ── Create equipment from mission ─────────────────────
+        equipment: list[Equipment] = []
+        if mission_obj is not None:
+            equipment = create_equipment_from_mission(
+                mission_obj, player_count,
+            )
 
         return cls(
             players=players,
             detonator=Detonator(max_failures=player_count - 1),
             markers=markers,
-            equipment=[],
+            equipment=equipment,
             history=TurnHistory(),
             wires_in_play=wires_in_play,
             current_player_index=captain,
             captain_index=captain,
+            mission=mission_obj,
         )
 
     # -----------------------------------------------------------------
@@ -2260,6 +2446,7 @@ class GameState:
         red_wires: list[int] | tuple[list[int], int] | None = None,
         constraints: list[SlotConstraint] | None = None,
         validate_stand_sizes: bool = True,
+        mission: missions.Mission | int | None = None,
     ) -> GameState:
         """Create a game state from partial mid-game information.
 
@@ -2288,15 +2475,20 @@ class GameState:
             blue_wires: Blue wire pool. ``None`` (default) = all blue
                 1-12 (48 wires). ``(low, high)`` tuple = blue wires for
                 values low through high (4 copies each).
-                ``list[Wire]`` = custom wire list.
+                ``list[Wire]`` = custom wire list. When a ``mission`` is
+                provided and ``blue_wires`` is ``None``, the mission's
+                ``blue_wire_range`` is used if it differs from (1, 12).
             yellow_wires: Yellow wire specification. ``None`` (default)
                 = no yellow wires. ``[4, 7]`` = Y4 and Y7 definitely
                 in play (KNOWN markers). ``([2, 3, 9], 2)`` = 2-of-3
                 uncertain (UNCERTAIN markers, solver handles
-                combinatorics).
+                combinatorics). If a mission requires yellow wires and
+                this is ``None``, a ``ValueError`` is raised.
             red_wires: Red wire specification. Same semantics as
                 ``yellow_wires``. ``[4]`` = R4 definitely in play.
-                ``([3, 7], 1)`` = 1-of-2 uncertain.
+                ``([3, 7], 1)`` = 1-of-2 uncertain. If a mission
+                requires red wires and this is ``None``, a
+                ``ValueError`` is raised.
             constraints: List of ``SlotConstraint`` objects (e.g.,
                 ``AdjacentNotEqual``, ``MustHaveValue``). These are
                 passed through to ``GameState.slot_constraints``.
@@ -2305,6 +2497,19 @@ class GameState:
                 based on the wire pool and captain dealing order.
                 Set to False for tests or scenarios where stand sizes
                 don't follow standard dealing (e.g., Grappling Hook).
+            mission: Optional mission to associate with this game
+                state. Can be a ``Mission`` object or an ``int``
+                (mission number, looked up via
+                ``missions.get_mission()``). When provided:
+                  - ``blue_wires`` inherits from the mission's
+                    ``blue_wire_range`` if not explicitly set.
+                  - If the mission requires yellow or red wires and
+                    they are not provided, a ``ValueError`` is raised
+                    with an explanatory message.
+                  - The wire counts are validated against the mission's
+                    expected counts.
+                Equipment is NOT inherited from the mission — specify
+                it explicitly via the ``equipment`` parameter.
 
         Returns:
             A GameState initialized from the provided partial information.
@@ -2319,6 +2524,21 @@ class GameState:
             raise ValueError(
                 f"Captain index must be 0-{player_count - 1}, "
                 f"got {captain}"
+            )
+
+        # ── Resolve mission ──────────────────────────────────────
+        mission_obj = _resolve_mission(mission)
+
+        # ── Inherit blue_wires from mission ──────────────────────
+        if blue_wires is None and mission_obj is not None:
+            low, high = mission_obj.blue_wire_range
+            if (low, high) != (1, 12):
+                blue_wires = (low, high)
+
+        # ── Validate colored wires against mission ───────────────
+        if mission_obj is not None:
+            _validate_mission_wires(
+                mission_obj, yellow_wires, red_wires,
             )
 
         cards = character_cards or [None] * player_count
@@ -2405,6 +2625,7 @@ class GameState:
             active_player_index=active_player_index,
             captain_index=captain,
             slot_constraints=all_constraints,
+            mission=mission_obj,
         )
 
     # -----------------------------------------------------------------
@@ -3271,9 +3492,15 @@ class GameState:
     def __str__(self) -> str:
         lines = [
             f"{_Colors.BOLD}=== Bomb Busters ==={_Colors.RESET}",
+        ]
+        if self.mission is not None:
+            lines.append(
+                f"{_Colors.DIM}{self.mission}{_Colors.RESET}"
+            )
+        lines.extend([
             str(self.detonator),
             "",
-        ]
+        ])
 
         # Blue wires in play (only shown when not the standard 1-12)
         blue_values_in_play = sorted({

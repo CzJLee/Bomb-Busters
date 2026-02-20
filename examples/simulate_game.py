@@ -19,6 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import bomb_busters
 import compute_probabilities
+import missions
 
 _C = bomb_busters._Colors
 
@@ -264,18 +265,15 @@ def main() -> None:
     print(f"{_C.BOLD}Full Mission Simulation{_C.RESET}")
     print(f"{_C.BOLD}{'=' * 60}{_C.RESET}")
     print()
-    print(
-        "  Mission: 48 blue wires + 2-of-3 yellow (UNCERTAIN)"
-        " + 1-of-2 red (UNCERTAIN)"
-    )
+    mission_obj = missions.get_mission(8)
+    print(f"  {mission_obj}")
     print("  Players: Alice (captain), Bob, Charlie, Diana, Eve")
     print()
 
     # ── Create game ────────────────────────────────────────────
     game = bomb_busters.GameState.create_game(
         player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
-        yellow_wires=(2, 3),
-        red_wires=3,
+        mission=8,
         seed=2,
     )
 

@@ -3,12 +3,9 @@
 Defines the ``Mission`` dataclass for representing mission configurations,
 an equipment catalog with all game equipment cards, and a registry of
 missions 1-30 with their setup parameters. Missions are static game data
-that can be referenced to help initialize a ``GameState`` faster.
-
-Future integration: ``GameState.create_game()`` and
-``GameState.from_partial_state()`` will accept an optional ``mission``
-parameter to inherit wire configuration, equipment availability, and
-other setup details from a mission definition.
+used by ``GameState.create_game()`` and ``GameState.from_partial_state()``
+via their ``mission`` parameter to inherit wire configuration, equipment
+availability, and other setup details from a mission definition.
 """
 
 from __future__ import annotations
@@ -456,8 +453,9 @@ class Mission:
     def wire_config(self) -> dict[str, object]:
         """Return wire configuration as a dict.
 
-        Keys match ``GameState.from_partial_state()`` parameter names.
-        Only non-default values are included.
+        Keys match ``GameState.create_game()`` parameter names
+        (counts/tuples, not specific wire numbers). Only non-default
+        values are included.
 
         Returns:
             Dict with keys ``blue_wires``, ``yellow_wires``, and/or
