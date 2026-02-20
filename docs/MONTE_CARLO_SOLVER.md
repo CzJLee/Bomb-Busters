@@ -170,8 +170,12 @@ The MC solver incorporates the same constraints as the exact solver:
 | Uncertain wire groups | Discard slots with `required_color` — same as exact solver |
 | Info tokens (blue) | Wire removed from pool; bounds tightened |
 | Info tokens (yellow) | `required_color` constraint on position |
+| `SlotParity` constraints | Enforced via `PositionConstraint.required_parity` in `wire_fits()` + `max_run` pruning — same as exact solver, built into per-player backward DP |
+| `SlotExcludedValue` constraints | Enforced via `PositionConstraint.excluded_values` in `wire_fits()` + `max_run` pruning — same as exact solver |
+| `UnsortedSlot` constraints | Unsorted positions placed in pseudo-player group with wide bounds — same as exact solver |
+| `ValueMultiplicity` constraints | Post-composition check per player; sample rejected if value count doesn't match required multiplicity |
 
-The MC solver uses the same `_setup_solver()` and `compute_position_constraints()` as the exact solver, so all constraint-handling logic is shared. The `MustNotHaveValue`, `AdjacentNotEqual`, and `AdjacentEqual` constraints add additional rejection checks after each player's composition is sampled. Since these constraints are rare (typically 0-2 per game), the increase in rejection rate is negligible.
+The MC solver uses the same `_setup_solver()` and `compute_position_constraints()` as the exact solver, so all constraint-handling logic is shared. The `MustNotHaveValue`, `AdjacentNotEqual`, `AdjacentEqual`, and `ValueMultiplicity` constraints add rejection checks after each player's composition is sampled. The `SlotParity`, `SlotExcludedValue`, and `UnsortedSlot` constraints are enforced structurally via `wire_fits()` and `max_run` during the per-player backward DP, requiring no rejection. Since these constraints are rare (typically 0-2 per game), the increase in rejection rate is negligible.
 
 ## Historical Context: Rejected Approaches
 

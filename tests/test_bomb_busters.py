@@ -2778,5 +2778,332 @@ class TestGrapplingHookStub(unittest.TestCase):
             game.apply_grappling_hook()
 
 
+class TestIndicatorTokenParsing(unittest.TestCase):
+    """Tests for indicator token parsing in _parse_slot_token()."""
+
+    # ── False info tokens ──────────────────────────────────────
+
+    def test_false_info_basic(self) -> None:
+        slot = bomb_busters._parse_slot_token("!3")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.excluded_value, 3)
+
+    def test_false_info_with_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("!3?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNotNone(slot.wire)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.BLUE)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+        self.assertEqual(slot.excluded_value, 3)
+
+    def test_false_info_with_color_prefix(self) -> None:
+        slot = bomb_busters._parse_slot_token("b!3?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.excluded_value, 3)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.BLUE)
+
+    # ── X tokens (unsorted) ───────────────────────────────────
+
+    def test_x_basic(self) -> None:
+        slot = bomb_busters._parse_slot_token("X")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertTrue(slot.is_unsorted)
+
+    def test_x_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("X5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+        self.assertTrue(slot.is_unsorted)
+
+    def test_x_hidden_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("X?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+        self.assertTrue(slot.is_unsorted)
+
+    def test_x_with_color_prefix(self) -> None:
+        slot = bomb_busters._parse_slot_token("bX?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertTrue(slot.is_unsorted)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.BLUE)
+
+    def test_x_red(self) -> None:
+        slot = bomb_busters._parse_slot_token("rX")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertTrue(slot.is_unsorted)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.RED)
+
+    def test_x_yellow_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("XY4")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertTrue(slot.is_unsorted)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+
+    # ── Even/Odd tokens ───────────────────────────────────────
+
+    def test_even_basic(self) -> None:
+        slot = bomb_busters._parse_slot_token("E")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.parity, bomb_busters.Parity.EVEN)
+
+    def test_even_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("E?4")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 4.0)
+        self.assertEqual(slot.parity, bomb_busters.Parity.EVEN)
+
+    def test_odd_basic(self) -> None:
+        slot = bomb_busters._parse_slot_token("O")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.parity, bomb_busters.Parity.ODD)
+
+    def test_odd_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("O?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+        self.assertEqual(slot.parity, bomb_busters.Parity.ODD)
+
+    def test_even_digit_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters._parse_slot_token("E4")
+
+    def test_odd_digit_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters._parse_slot_token("O5")
+
+    def test_even_yellow_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters._parse_slot_token("yE")
+
+    def test_odd_red_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters._parse_slot_token("rO")
+
+    def test_even_with_blue_prefix(self) -> None:
+        slot = bomb_busters._parse_slot_token("bE?4")
+        self.assertEqual(slot.parity, bomb_busters.Parity.EVEN)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.BLUE)
+
+    # ── Multiplicity tokens ───────────────────────────────────
+
+    def test_1x_basic(self) -> None:
+        slot = bomb_busters._parse_slot_token("1x")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.SINGLE)
+
+    def test_2x_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("2x7")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.sort_value, 7.0)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.DOUBLE)
+
+    def test_2x_hidden_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("2x?7")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 7.0)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.DOUBLE)
+
+    def test_3x_hidden_god_mode(self) -> None:
+        slot = bomb_busters._parse_slot_token("3x?9")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 9.0)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.TRIPLE)
+
+    def test_2x_yellow_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("2xY4")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.DOUBLE)
+
+    def test_2x_yellow_hidden(self) -> None:
+        slot = bomb_busters._parse_slot_token("2x?Y4")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+        self.assertEqual(slot.multiplicity, bomb_busters.Multiplicity.DOUBLE)
+
+    def test_2x_red_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            bomb_busters._parse_slot_token("2xR5")
+
+    # ── Color prefix ──────────────────────────────────────────
+
+    def test_blue_prefix_hidden(self) -> None:
+        slot = bomb_busters._parse_slot_token("b?")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.BLUE)
+
+    def test_yellow_prefix_hidden(self) -> None:
+        slot = bomb_busters._parse_slot_token("y?")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.YELLOW)
+
+    def test_red_prefix_hidden(self) -> None:
+        slot = bomb_busters._parse_slot_token("r?")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.required_color, bomb_busters.WireColor.RED)
+
+    # ── Backward compatibility ────────────────────────────────
+
+    def test_plain_number_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+
+    def test_hidden_number(self) -> None:
+        slot = bomb_busters._parse_slot_token("?5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertEqual(slot.wire.sort_value, 5.0)
+
+    def test_yellow_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("Y4")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.YELLOW)
+
+    def test_red_cut(self) -> None:
+        slot = bomb_busters._parse_slot_token("R5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.CUT)
+        self.assertEqual(slot.wire.color, bomb_busters.WireColor.RED)
+
+    def test_info_token(self) -> None:
+        slot = bomb_busters._parse_slot_token("i5")
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertEqual(slot.info_token, 5)
+
+    def test_info_yellow(self) -> None:
+        slot = bomb_busters._parse_slot_token("iY")
+        self.assertEqual(slot.state, bomb_busters.SlotState.INFO_REVEALED)
+        self.assertEqual(slot.info_token, "YELLOW")
+
+    def test_unknown_hidden(self) -> None:
+        slot = bomb_busters._parse_slot_token("?")
+        self.assertEqual(slot.state, bomb_busters.SlotState.HIDDEN)
+        self.assertIsNone(slot.wire)
+
+    # ── Indicator label display ───────────────────────────────
+
+    def test_indicator_label_even(self) -> None:
+        slot = bomb_busters._parse_slot_token("E")
+        result = slot.indicator_label()
+        self.assertIsNotNone(result)
+        plain, _ = result
+        self.assertEqual(plain, "E")
+
+    def test_indicator_label_odd(self) -> None:
+        slot = bomb_busters._parse_slot_token("O")
+        result = slot.indicator_label()
+        self.assertIsNotNone(result)
+        plain, _ = result
+        self.assertEqual(plain, "O")
+
+    def test_indicator_label_multiplicity(self) -> None:
+        slot = bomb_busters._parse_slot_token("2x")
+        result = slot.indicator_label()
+        self.assertIsNotNone(result)
+        plain, _ = result
+        self.assertEqual(plain, "2x")
+
+    def test_indicator_label_unsorted(self) -> None:
+        slot = bomb_busters._parse_slot_token("X")
+        result = slot.indicator_label()
+        self.assertIsNotNone(result)
+        plain, _ = result
+        self.assertEqual(plain, "X")
+
+    def test_indicator_label_false_info(self) -> None:
+        slot = bomb_busters._parse_slot_token("!3")
+        result = slot.indicator_label()
+        self.assertIsNotNone(result)
+        plain, _ = result
+        self.assertEqual(plain, "!3")
+
+    def test_indicator_label_none_for_plain(self) -> None:
+        slot = bomb_busters._parse_slot_token("?")
+        self.assertIsNone(slot.indicator_label())
+
+
+class TestAutoConstraintGeneration(unittest.TestCase):
+    """Tests for auto-generation of constraints from parsed slot metadata."""
+
+    def test_parity_constraint_generated(self) -> None:
+        alice = bomb_busters.TileStand.from_string("E ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9")
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            validate_stand_sizes=False,
+        )
+        parity_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.SlotParity)
+        ]
+        self.assertEqual(len(parity_constraints), 1)
+        self.assertEqual(parity_constraints[0].player_index, 0)
+        self.assertEqual(parity_constraints[0].slot_index, 0)
+        self.assertEqual(parity_constraints[0].parity, bomb_busters.Parity.EVEN)
+
+    def test_multiplicity_constraint_generated(self) -> None:
+        alice = bomb_busters.TileStand.from_string("2x ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9")
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            validate_stand_sizes=False,
+        )
+        vm_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.ValueMultiplicity)
+        ]
+        self.assertEqual(len(vm_constraints), 1)
+        self.assertEqual(vm_constraints[0].multiplicity, bomb_busters.Multiplicity.DOUBLE)
+
+    def test_unsorted_constraint_generated(self) -> None:
+        alice = bomb_busters.TileStand.from_string("X ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9")
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            validate_stand_sizes=False,
+        )
+        unsorted_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.UnsortedSlot)
+        ]
+        self.assertEqual(len(unsorted_constraints), 1)
+        self.assertEqual(unsorted_constraints[0].slot_index, 0)
+
+    def test_excluded_value_constraint_generated(self) -> None:
+        alice = bomb_busters.TileStand.from_string("!3 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9")
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            validate_stand_sizes=False,
+        )
+        excl_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.SlotExcludedValue)
+        ]
+        self.assertEqual(len(excl_constraints), 1)
+        self.assertEqual(excl_constraints[0].excluded_value, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

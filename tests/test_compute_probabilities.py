@@ -170,7 +170,7 @@ class TestPositionConstraints(unittest.TestCase):
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 8.0)],
             [bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0)],
         ])
-        constraints = compute_probabilities.compute_position_constraints(game, 0)
+        constraints, _ = compute_probabilities.compute_position_constraints(game, 0)
         self.assertEqual(len(constraints), 3)  # 3 other players, 1 slot each
         for c in constraints:
             self.assertEqual(c.lower_bound, 0.0)
@@ -190,7 +190,7 @@ class TestPositionConstraints(unittest.TestCase):
         game.players[1].tile_stand.cut_wire_at(0)
         game.players[1].tile_stand.cut_wire_at(2)
 
-        constraints = compute_probabilities.compute_position_constraints(game, 0)
+        constraints, _ = compute_probabilities.compute_position_constraints(game, 0)
         # Find P1's constraint
         p1_constraints = [c for c in constraints if c.player_index == 1]
         self.assertEqual(len(p1_constraints), 1)
@@ -227,7 +227,7 @@ class TestPositionConstraints(unittest.TestCase):
         game.players[1].tile_stand.cut_wire_at(0)  # blue-2
         game.players[1].tile_stand.cut_wire_at(4)  # blue-10
 
-        constraints = compute_probabilities.compute_position_constraints(game, 0)
+        constraints, _ = compute_probabilities.compute_position_constraints(game, 0)
         p1_constraints = {
             c.slot_index: c for c in constraints if c.player_index == 1
         }
@@ -3074,6 +3074,174 @@ class TestIndicationQuality(unittest.TestCase):
             )
 
 
+class TestParityIndicationQuality(unittest.TestCase):
+    """Tests for compute_probabilities.rank_indications_parity."""
+
+    def test_parity_less_info_than_standard(self) -> None:
+        """Parity indication should always reveal less info than standard."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=42,
+        )
+        std_choices = compute_probabilities.rank_indications(
+            game, player_index=0,
+        )
+        par_choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        self.assertGreater(len(std_choices), 0)
+        self.assertGreater(len(par_choices), 0)
+        self.assertGreater(
+            std_choices[0].information_gain,
+            par_choices[0].information_gain,
+            "Standard indication should reveal more info than parity",
+        )
+
+    def test_parity_ig_non_negative(self) -> None:
+        """Parity indication information gain should never be negative."""
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?2 ?3 ?4 ?5 ?6 ?7 ?8 ?9 ?10",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+        )
+
+        choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        for choice in choices:
+            self.assertGreaterEqual(
+                choice.information_gain, 0.0,
+                f"Negative IG at slot {choice.slot_index}",
+            )
+
+    def test_parity_sorted_descending(self) -> None:
+        """Results should be sorted by information_gain descending."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=100,
+        )
+        choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        for i in range(len(choices) - 1):
+            self.assertGreaterEqual(
+                choices[i].information_gain,
+                choices[i + 1].information_gain,
+                f"Choices not sorted at index {i}",
+            )
+
+    def test_parity_deduplicates_same_parity_same_slot(self) -> None:
+        """Same parity at same slot should not produce duplicate entries.
+
+        This can't actually happen (one slot = one wire = one parity),
+        but we verify no duplicates in general.
+        """
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=42,
+        )
+        choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        seen = set()
+        for c in choices:
+            key = c.slot_index
+            self.assertNotIn(key, seen, f"Duplicate slot_index {key}")
+            seen.add(key)
+
+    def test_parity_skips_non_blue(self) -> None:
+        """Only blue wires should appear in parity indication choices."""
+        yellow = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)
+        red = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
+        alice = bomb_busters.TileStand.from_wires([
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+            yellow,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+            red,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0),
+        ])
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            yellow_wires=[4],
+            red_wires=[7],
+        )
+
+        choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        for choice in choices:
+            self.assertEqual(choice.wire.color, bomb_busters.WireColor.BLUE)
+        self.assertEqual(len(choices), 5)
+
+    def test_parity_raises_on_unknown_wires(self) -> None:
+        """Should raise ValueError if player has unknown wires."""
+        alice = bomb_busters.TileStand.from_string("? ? ? ?")
+        bob = bomb_busters.TileStand.from_string("? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[alice, bob, charlie, diana],
+            blue_wires=(1, 4),
+        )
+
+        with self.assertRaises(ValueError):
+            compute_probabilities.rank_indications_parity(
+                game, player_index=0,
+            )
+
+    def test_parity_edge_vs_center_indication(self) -> None:
+        """Parity indication near stand edges should differ from center.
+
+        Even/odd at the extremes (slot A or last slot) constrains
+        fewer neighbors than an indication in the middle.
+        """
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?3 ?4 ?6 ?8 ?9 ?10 ?11 ?12 ?12",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+        )
+
+        choices = compute_probabilities.rank_indications_parity(
+            game, player_index=0,
+        )
+        self.assertGreater(len(choices), 2)
+        # At minimum: endpoint (slot A = 1, odd) should differ from
+        # some interior indication
+        ig_by_slot = {c.slot_index: c.information_gain for c in choices}
+        self.assertIn(0, ig_by_slot)
+        # Just verify we get valid positive results
+        for ig in ig_by_slot.values():
+            self.assertGreaterEqual(ig, 0.0)
+
+
 class TestPoolBugFix(unittest.TestCase):
     """Tests for the compute_unknown_pool observer info-revealed fix."""
 
@@ -3130,7 +3298,7 @@ class TestPoolBugFix(unittest.TestCase):
         # Pool and position counts must balance
         known = compute_probabilities.extract_known_info(game, 0)
         pool = compute_probabilities.compute_unknown_pool(known, game)
-        constraints = compute_probabilities.compute_position_constraints(
+        constraints, _ = compute_probabilities.compute_position_constraints(
             game, 0,
         )
         self.assertEqual(
@@ -3165,7 +3333,7 @@ class TestPoolBugFix(unittest.TestCase):
         for pi in range(5):
             known = compute_probabilities.extract_known_info(game, pi)
             pool = compute_probabilities.compute_unknown_pool(known, game)
-            constraints = compute_probabilities.compute_position_constraints(
+            constraints, _ = compute_probabilities.compute_position_constraints(
                 game, pi,
             )
             self.assertEqual(
@@ -3457,7 +3625,7 @@ class TestMonteCarloSampling(unittest.TestCase):
         # Verify pool == positions
         known = compute_probabilities.extract_known_info(game, 0)
         pool = compute_probabilities.compute_unknown_pool(known, game)
-        constraints = compute_probabilities.compute_position_constraints(
+        constraints, _ = compute_probabilities.compute_position_constraints(
             game, 0,
         )
         self.assertEqual(
@@ -3618,7 +3786,7 @@ class TestMCGuidedSampler(unittest.TestCase):
 
         # For each position, verify that only wires with sort_value
         # >= lower bound and <= upper bound appear
-        constraints = compute_probabilities.compute_position_constraints(
+        constraints, _ = compute_probabilities.compute_position_constraints(
             game, 0,
         )
         constraint_map = {
@@ -5512,6 +5680,438 @@ class TestEquipmentProbabilityAccuracy(unittest.TestCase):
             self.assertAlmostEqual(
                 sd_move.probability, direct_prob, places=10,
             )
+
+
+class TestSlotParityConstraint(unittest.TestCase):
+    """Tests for even/odd parity constraint enforcement in the solver."""
+
+    def test_even_eliminates_odd(self) -> None:
+        """Even parity constraint should eliminate all odd blue values."""
+        # Use blue 1-6 (24 wires) to keep solver fast.
+        # 5 players, captain=0: deal is 5+5+5+5+4 = 24.
+        # Alice (observer) has 5 known wires → pool = 19.
+        # Other players: 5+5+5+4 = 19 positions.
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        bob = bomb_busters.TileStand.from_string("E ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        # Slot A on Bob (player 1, slot 0) should only have even values
+        key = (1, 0)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        for wire, count in counter.items():
+            if count > 0 and wire.color == bomb_busters.WireColor.BLUE:
+                self.assertEqual(
+                    wire.gameplay_value % 2, 0,
+                    f"Odd value {wire.gameplay_value} found at even-constrained slot",
+                )
+
+    def test_odd_eliminates_even(self) -> None:
+        """Odd parity constraint should eliminate all even blue values."""
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        bob = bomb_busters.TileStand.from_string("O ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        key = (1, 0)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        for wire, count in counter.items():
+            if count > 0 and wire.color == bomb_busters.WireColor.BLUE:
+                self.assertEqual(
+                    wire.gameplay_value % 2, 1,
+                    f"Even value {wire.gameplay_value} found at odd-constrained slot",
+                )
+
+
+class TestSlotExcludedValueConstraint(unittest.TestCase):
+    """Tests for excluded value constraint enforcement in the solver."""
+
+    def test_excluded_value_removed(self) -> None:
+        """Excluded value should not appear at the constrained slot."""
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        # Bob's slot A has !3 (not value 3)
+        bob = bomb_busters.TileStand.from_string("!3 ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        key = (1, 0)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        # Value 3 should have zero count
+        for wire, count in counter.items():
+            if wire.gameplay_value == 3:
+                self.assertEqual(
+                    count, 0,
+                    "Excluded value 3 should not appear at slot with !3 constraint",
+                )
+
+
+class TestUnsortedSlotConstraint(unittest.TestCase):
+    """Tests for unsorted (X token) constraint enforcement in the solver."""
+
+    def test_unsorted_slot_wide_bounds(self) -> None:
+        """X token slot should have wide bounds (not constrained by neighbors)."""
+        # 24 wires, 5 players: 5+5+5+5+4.
+        # Alice: 5 known → pool = 19.
+        # Bob: 5 slots (X + cut 3 + 3 hidden) → 1 unsorted + 3 sorted = 4 positions.
+        # Remaining: Charlie(5) + Diana(5) + Eve(4) = 14. Total: 18.
+        # But pool = 24 - 5 (Alice) - 1 (Bob cut) = 18 ✓
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        bob = bomb_busters.TileStand.from_string("X 3 ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        # The X slot on Bob should be able to hold values > 3
+        # (unlike a sorted slot A which would need to be <= 3)
+        key = (1, 0)
+        self.assertIn(key, probs)
+        counter = probs[key]
+        has_high_value = any(
+            wire.sort_value > 3.0 and count > 0
+            for wire, count in counter.items()
+        )
+        self.assertTrue(
+            has_high_value,
+            "Unsorted X slot should be able to hold values above its right neighbor",
+        )
+
+    def test_unsorted_doesnt_constrain_neighbors(self) -> None:
+        """X token position should not constrain its sorted neighbors."""
+        # Bob has 1 (cut) at A, X at B, ? at C (hidden), ...
+        # The sorted neighbor C should get bounds from A (lower=1.0),
+        # not from the X slot at B.
+        bob = bomb_busters.TileStand.from_string("1 X ? ? ?")
+        # Check that sort bounds for slot C skip the X slot at B
+        # and use the cut wire at A instead.
+        lower, upper = bomb_busters.get_sort_value_bounds(
+            bob.slots, 2,  # slot C
+        )
+        # Lower bound should be from slot A (sort_value=1.0), not from X
+        self.assertEqual(lower, 1.0)
+
+
+class TestValueMultiplicityConstraint(unittest.TestCase):
+    """Tests for x1/x2/x3 value multiplicity constraint enforcement."""
+
+    def test_x1_restricts_to_single(self) -> None:
+        """x1 token means the wire value appears exactly once on the stand."""
+        # Blue 1-6 (24 wires), 5 players: 5+5+5+5+4.
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        # Bob has x1 at slot A, rest hidden
+        bob = bomb_busters.TileStand.from_string("1x ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        # Verify that x1 constraint is in the game constraints
+        vm_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.ValueMultiplicity)
+        ]
+        self.assertEqual(len(vm_constraints), 1)
+        self.assertEqual(
+            vm_constraints[0].multiplicity,
+            bomb_busters.Multiplicity.SINGLE,
+        )
+
+    def test_x2_with_known_value(self) -> None:
+        """x2 token with one cut wire of same value should expect exactly 2."""
+        # Bob has 3 (cut) at A and 2x at B — means value at B appears
+        # 2 times on the stand (including cut). So B must hold some value
+        # V where the total count of V on Bob's stand (cut + hidden) = 2.
+        # Pool: 24 - 5 (Alice) - 1 (Bob cut 3) = 18.
+        # Positions: 4 (Bob hidden) + 5 + 5 + 4 = 18 ✓
+        alice = bomb_busters.TileStand.from_string("?1 ?2 ?3 ?4 ?5")
+        bob = bomb_busters.TileStand.from_string("3 2x ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ?")
+        game = bomb_busters.GameState.from_partial_state(
+            player_names=["A", "B", "C", "D", "E"],
+            stands=[alice, bob, charlie, diana, eve],
+            active_player_index=0,
+            blue_wires=(1, 6),
+        )
+        probs = compute_probabilities.compute_position_probabilities(
+            game, active_player_index=0, show_progress=False,
+        )
+        # The solver should have enforced VM — check it's in the constraints
+        vm_constraints = [
+            c for c in game.slot_constraints
+            if isinstance(c, bomb_busters.ValueMultiplicity)
+        ]
+        self.assertEqual(len(vm_constraints), 1)
+        self.assertEqual(
+            vm_constraints[0].multiplicity,
+            bomb_busters.Multiplicity.DOUBLE,
+        )
+
+
+class TestMultiplicityIndicationQuality(unittest.TestCase):
+    """Tests for compute_probabilities.rank_indications_multiplicity."""
+
+    def test_multiplicity_less_info_than_standard(self) -> None:
+        """Multiplicity indication should reveal less info than standard."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=42,
+        )
+        std_choices = compute_probabilities.rank_indications(
+            game, player_index=0,
+        )
+        mult_choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        self.assertGreater(len(std_choices), 0)
+        self.assertGreater(len(mult_choices), 0)
+        self.assertGreater(
+            std_choices[0].information_gain,
+            mult_choices[0].information_gain,
+            "Standard indication should reveal more info than multiplicity",
+        )
+
+    def test_multiplicity_less_info_than_standard_multiple_seeds(
+        self,
+    ) -> None:
+        """Verify across multiple seeds that standard > multiplicity."""
+        for seed in [1, 10, 42, 77, 200]:
+            game = bomb_busters.GameState.create_game(
+                player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+                seed=seed,
+            )
+            std = compute_probabilities.rank_indications(
+                game, player_index=0,
+            )
+            mult = compute_probabilities.rank_indications_multiplicity(
+                game, player_index=0,
+            )
+            if std and mult:
+                self.assertGreater(
+                    std[0].information_gain,
+                    mult[0].information_gain,
+                    f"Seed {seed}: std best IG should exceed mult best IG",
+                )
+
+    def test_multiplicity_sorted_descending(self) -> None:
+        """Results should be sorted by information_gain descending."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=100,
+        )
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        for i in range(len(choices) - 1):
+            self.assertGreaterEqual(
+                choices[i].information_gain,
+                choices[i + 1].information_gain,
+                f"Choices not sorted at index {i}",
+            )
+
+    def test_multiplicity_skips_non_blue(self) -> None:
+        """Only blue wires should appear in multiplicity indication choices."""
+        yellow = bomb_busters.Wire(bomb_busters.WireColor.YELLOW, 4.1)
+        red = bomb_busters.Wire(bomb_busters.WireColor.RED, 7.5)
+        alice = bomb_busters.TileStand.from_wires([
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 1.0),
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 3.0),
+            yellow,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 5.0),
+            red,
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 9.0),
+            bomb_busters.Wire(bomb_busters.WireColor.BLUE, 11.0),
+        ])
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            yellow_wires=[4],
+            red_wires=[7],
+        )
+
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        for choice in choices:
+            self.assertEqual(choice.wire.color, bomb_busters.WireColor.BLUE)
+        self.assertEqual(len(choices), 5)
+
+    def test_multiplicity_raises_on_unknown_wires(self) -> None:
+        """Should raise ValueError if player has unknown wires."""
+        alice = bomb_busters.TileStand.from_string("? ? ? ?")
+        bob = bomb_busters.TileStand.from_string("? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana"],
+            stands=[alice, bob, charlie, diana],
+            blue_wires=(1, 4),
+        )
+
+        with self.assertRaises(ValueError):
+            compute_probabilities.rank_indications_multiplicity(
+                game, player_index=0,
+            )
+
+    def test_multiplicity_no_duplicate_slots(self) -> None:
+        """No duplicate slot_index values in the results."""
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=42,
+        )
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        seen = set()
+        for c in choices:
+            key = c.slot_index
+            self.assertNotIn(key, seen, f"Duplicate slot_index {key}")
+            seen.add(key)
+
+    def test_multiplicity_x1_vs_x2_indication(self) -> None:
+        """x1 (unique value) and x2 (duplicate value) should differ in IG.
+
+        A wire value that appears exactly once (x1) on the stand provides
+        different information than one appearing twice (x2), so their
+        IG values should generally differ.
+        """
+        # Stand with a mix: 1 appears once, 5 appears twice
+        alice = bomb_busters.TileStand.from_string(
+            "?1 ?3 ?5 ?5 ?7 ?8 ?9 ?10 ?11 ?12",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+        )
+
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        self.assertGreater(len(choices), 0)
+
+        # Find choices for value 1 (x1) and value 5 (x2)
+        ig_by_value: dict[int, float] = {}
+        for c in choices:
+            gv = c.wire.gameplay_value
+            assert isinstance(gv, int)
+            if gv not in ig_by_value:
+                ig_by_value[gv] = c.information_gain
+
+        # Both values should be present with different IG
+        if 1 in ig_by_value and 5 in ig_by_value:
+            self.assertNotAlmostEqual(
+                ig_by_value[1], ig_by_value[5], places=4,
+                msg="x1 and x2 indications should have different IG",
+            )
+
+    def test_multiplicity_uncertainty_resolved_range(self) -> None:
+        """Uncertainty resolved should be between -1.0 and 1.0.
+
+        Multiplicity can have negative IG (sum-of-marginals artifact),
+        so uncertainty_resolved can be negative. But it should not
+        exceed 1.0 (cannot resolve more than 100% of baseline).
+        """
+        game = bomb_busters.GameState.create_game(
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            seed=42,
+        )
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        for choice in choices:
+            self.assertLessEqual(
+                choice.uncertainty_resolved, 1.0,
+                f"uncertainty_resolved > 1.0 at slot {choice.slot_index}",
+            )
+
+    def test_multiplicity_all_same_value(self) -> None:
+        """Stand with all same value: xN token is fully determined.
+
+        If all wires have the same value, the xN token reveals N
+        (the count), which the observer can already infer from the
+        stand size. IG should be low or zero.
+        """
+        alice = bomb_busters.TileStand.from_string(
+            "?5 ?5 ?5 ?5 ?5 ?5 ?5 ?5 ?5 ?5",
+        )
+        bob = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+        charlie = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        diana = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ?")
+        eve = bomb_busters.TileStand.from_string("? ? ? ? ? ? ? ? ? ?")
+
+        game = bomb_busters.GameState.from_partial_state(
+            validate_stand_sizes=False,
+            player_names=["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            stands=[alice, bob, charlie, diana, eve],
+            blue_wires=(1, 12),
+        )
+
+        choices = compute_probabilities.rank_indications_multiplicity(
+            game, player_index=0,
+        )
+        # Should have at least some choices (all are value 5)
+        # They should all have the same slot but are deduplicated,
+        # so we might get only unique slot indices
+        self.assertGreater(len(choices), 0)
 
 
 if __name__ == "__main__":

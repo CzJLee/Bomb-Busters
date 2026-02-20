@@ -34,6 +34,12 @@ _C = bomb_busters._Colors
 # Discard positions absorb candidate wires that are NOT in the game.
 _DISCARD_PLAYER_INDEX = -1
 
+# Sentinel prefix for unsorted (X token) pseudo-player indices. Each
+# unsorted slot gets a unique pseudo-player so the composition solver
+# doesn't enforce ascending order between them. Index scheme:
+# _UNSORTED_PLAYER_PREFIX - counter (e.g., -100, -101, -102, ...).
+_UNSORTED_PLAYER_PREFIX = -100
+
 
 # =============================================================================
 # Equipment Type Enum
@@ -303,12 +309,23 @@ class PositionConstraint:
         required_color: If set, only wires of this color can occupy the
             position (e.g., for yellow info-revealed slots where the
             exact wire is unknown but the color is known).
+        required_parity: If set, only blue wires with matching parity
+            can occupy this position (from even/odd indicator tokens).
+        excluded_values: Set of gameplay values (int 1-12) that cannot
+            occupy this position (from false info tokens).
+        is_unsorted: If True, this position is not sorted with the rest
+            of the stand (X token). Used for pseudo-player grouping.
     """
     player_index: int
     slot_index: int
     lower_bound: float
     upper_bound: float
     required_color: bomb_busters.WireColor | None = None
+    required_parity: bomb_busters.Parity | None = None
+    excluded_values: frozenset[int] = dataclasses.field(
+        default_factory=frozenset,
+    )
+    is_unsorted: bool = False
 
     def wire_fits(self, wire: bomb_busters.Wire) -> bool:
         """Check if a wire could legally occupy this position.
@@ -317,17 +334,33 @@ class PositionConstraint:
             wire: The wire to check.
 
         Returns:
-            True if the wire's sort_value is within bounds and matches
-            the required color (if any).
+            True if the wire satisfies all constraints: sort_value
+            within bounds, color match, parity match, and not excluded.
         """
         if self.required_color is not None and wire.color != self.required_color:
             return False
-        return self.lower_bound <= wire.sort_value <= self.upper_bound
+        if not (self.lower_bound <= wire.sort_value <= self.upper_bound):
+            return False
+        if self.required_parity is not None:
+            # Parity only applies to blue wires
+            if wire.color != bomb_busters.WireColor.BLUE:
+                return False
+            value = wire.gameplay_value
+            assert isinstance(value, int)
+            if self.required_parity == bomb_busters.Parity.EVEN:
+                if value % 2 != 0:
+                    return False
+            else:  # ODD
+                if value % 2 != 1:
+                    return False
+        if self.excluded_values and wire.gameplay_value in self.excluded_values:
+            return False
+        return True
 
 
 def compute_position_constraints(
     game: bomb_busters.GameState, active_player_index: int
-) -> list[PositionConstraint]:
+) -> tuple[list[PositionConstraint], dict[int, int]]:
     """Compute sort-value constraints for unknown slots on other players' stands.
 
     For each hidden slot, scans left and right to find the nearest known
@@ -335,29 +368,101 @@ def compute_position_constraints(
     bounds. Also includes INFO_REVEALED slots where the wire identity is
     unknown (e.g., yellow info tokens in calculator mode).
 
+    Populates indicator token fields on each constraint:
+    - ``required_parity`` from even/odd tokens (slot field or SlotParity)
+    - ``excluded_values`` from false info tokens (slot field or SlotExcludedValue)
+    - ``required_color`` from color prefix or yellow info tokens
+    - ``is_unsorted`` from X tokens (slot field or UnsortedSlot)
+
+    Unsorted (X token) positions are routed to pseudo-players (unique
+    negative indices starting from ``_UNSORTED_PLAYER_PREFIX``) so the
+    composition solver doesn't enforce ascending order between them.
+
     Args:
         game: The current game state.
         active_player_index: The observing player's index.
 
     Returns:
-        List of PositionConstraint objects for all constrained slots on
-        other players' stands.
+        A tuple of (constraints, unsorted_player_map) where constraints
+        is a list of PositionConstraint objects and unsorted_player_map
+        maps pseudo-player indices back to real player indices.
     """
     constraints: list[PositionConstraint] = []
+    unsorted_player_map: dict[int, int] = {}
+    unsorted_counter = 0
+
+    # Pre-index slot constraints by (player_index, slot_index) for
+    # efficient lookup when building PositionConstraints.
+    slot_parity_map: dict[tuple[int, int], bomb_busters.Parity] = {}
+    slot_excluded_map: dict[tuple[int, int], set[int]] = {}
+    slot_unsorted_set: set[tuple[int, int]] = set()
+
+    for c in game.slot_constraints:
+        if isinstance(c, bomb_busters.SlotParity):
+            slot_parity_map[(c.player_index, c.slot_index)] = c.parity
+        elif isinstance(c, bomb_busters.SlotExcludedValue):
+            slot_excluded_map.setdefault(
+                (c.player_index, c.slot_index), set(),
+            ).add(c.excluded_value)
+        elif isinstance(c, bomb_busters.UnsortedSlot):
+            slot_unsorted_set.add((c.player_index, c.slot_index))
+
     for p_idx, player in enumerate(game.players):
         if p_idx == active_player_index:
             continue
         stand = player.tile_stand
         for s_idx, slot in enumerate(stand.slots):
             if slot.state == bomb_busters.SlotState.HIDDEN:
-                lower, upper = bomb_busters.get_sort_value_bounds(
-                    stand.slots, s_idx,
+                # Determine if this is an unsorted (X token) position
+                is_unsorted = (
+                    slot.is_unsorted
+                    or (p_idx, s_idx) in slot_unsorted_set
                 )
+
+                if is_unsorted:
+                    # Unsorted: assign to unique pseudo-player with
+                    # unconstrained bounds (can be any wire).
+                    pseudo_idx = _UNSORTED_PLAYER_PREFIX - unsorted_counter
+                    unsorted_player_map[pseudo_idx] = p_idx
+                    unsorted_counter += 1
+                    lower, upper = 0.0, 13.0
+                    p_for_constraint = pseudo_idx
+                else:
+                    lower, upper = bomb_busters.get_sort_value_bounds(
+                        stand.slots, s_idx,
+                    )
+                    p_for_constraint = p_idx
+
+                # Parity from slot field or SlotParity constraint
+                parity = slot.parity
+                if parity is None:
+                    parity = slot_parity_map.get((p_idx, s_idx))
+
+                # Excluded values from slot field and SlotExcludedValue
+                # constraints (merge both sources)
+                excluded: set[int] = set()
+                if slot.excluded_value is not None:
+                    excluded.add(slot.excluded_value)
+                constraint_excluded = slot_excluded_map.get(
+                    (p_idx, s_idx),
+                )
+                if constraint_excluded:
+                    excluded |= constraint_excluded
+
+                # Required color from slot field
+                req_color = slot.required_color
+
                 constraints.append(PositionConstraint(
-                    player_index=p_idx,
+                    player_index=p_for_constraint,
                     slot_index=s_idx,
                     lower_bound=lower,
                     upper_bound=upper,
+                    required_color=req_color,
+                    required_parity=parity,
+                    excluded_values=(
+                        frozenset(excluded) if excluded else frozenset()
+                    ),
+                    is_unsorted=is_unsorted,
                 ))
             elif (
                 slot.state == bomb_busters.SlotState.INFO_REVEALED
@@ -377,7 +482,7 @@ def compute_position_constraints(
                     upper_bound=upper,
                     required_color=bomb_busters.WireColor.YELLOW,
                 ))
-    return constraints
+    return constraints, unsorted_player_map
 
 
 # =============================================================================
@@ -447,6 +552,15 @@ class SolverContext:
         slot_to_pos: Dict mapping player_index to a dict of
             slot_index -> position_index within that player's positions
             list. Only includes hidden slots tracked by the solver.
+        value_multiplicity: Dict mapping player_index to list of
+            ValueMultiplicity constraints. Used for post-composition
+            checking in both exact and MC solvers.
+        known_value_counts: Dict mapping player_index to a dict of
+            gameplay_value -> count for CUT and INFO_REVEALED slots.
+            Precomputed for ValueMultiplicity checking.
+        unsorted_player_map: Dict mapping unsorted pseudo-player index
+            back to the real player index. Used by
+            _forward_pass_positions() to remap results.
     """
     positions_by_player: dict[int, list[PositionConstraint]]
     player_order: list[int]
@@ -460,6 +574,15 @@ class SolverContext:
         int, list[bomb_busters.AdjacentNotEqual | bomb_busters.AdjacentEqual]
     ] = dataclasses.field(default_factory=dict)
     slot_to_pos: dict[int, dict[int, int]] = dataclasses.field(
+        default_factory=dict,
+    )
+    value_multiplicity: dict[
+        int, list[bomb_busters.ValueMultiplicity]
+    ] = dataclasses.field(default_factory=dict)
+    known_value_counts: dict[
+        int, dict[int | str, int]
+    ] = dataclasses.field(default_factory=dict)
+    unsorted_player_map: dict[int, int] = dataclasses.field(
         default_factory=dict,
     )
 
@@ -482,7 +605,9 @@ def _setup_solver(
     """
     known = extract_known_info(game, active_player_index)
     unknown_pool = compute_unknown_pool(known, game)
-    constraints = compute_position_constraints(game, active_player_index)
+    constraints, unsorted_player_map = compute_position_constraints(
+        game, active_player_index,
+    )
 
     # Handle uncertain wire groups: add unresolved candidates to the
     # unknown pool and create discard positions (slack variables) for
@@ -557,6 +682,7 @@ def _setup_solver(
     adjacent_constraints: dict[
         int, list[bomb_busters.AdjacentNotEqual | bomb_busters.AdjacentEqual]
     ] = {}
+    vm_constraints: dict[int, list[bomb_busters.ValueMultiplicity]] = {}
 
     for c in game.slot_constraints:
         if isinstance(c, bomb_busters.MustHaveValue):
@@ -567,6 +693,40 @@ def _setup_solver(
             c, (bomb_busters.AdjacentNotEqual, bomb_busters.AdjacentEqual),
         ):
             adjacent_constraints.setdefault(c.player_index, []).append(c)
+        elif isinstance(c, bomb_busters.ValueMultiplicity):
+            vm_constraints.setdefault(c.player_index, []).append(c)
+
+    # ── Precompute known value counts per player ──────────────
+    # For each player, count gameplay values of CUT and INFO_REVEALED
+    # slots (used by ValueMultiplicity post-composition checking).
+    known_value_counts: dict[int, dict[int | str, int]] = {}
+    if vm_constraints:
+        for p_idx, player in enumerate(game.players):
+            if p_idx == active_player_index:
+                continue
+            counts: dict[int | str, int] = {}
+            for slot in player.tile_stand.slots:
+                if slot.state in (
+                    bomb_busters.SlotState.CUT,
+                    bomb_busters.SlotState.INFO_REVEALED,
+                ):
+                    gv: int | str | None = None
+                    if slot.wire is not None:
+                        gv = slot.wire.gameplay_value
+                    elif (
+                        slot.state == bomb_busters.SlotState.INFO_REVEALED
+                        and isinstance(slot.info_token, int)
+                    ):
+                        gv = slot.info_token
+                    elif (
+                        slot.state == bomb_busters.SlotState.INFO_REVEALED
+                        and slot.info_token == "YELLOW"
+                    ):
+                        gv = "YELLOW"
+                    if gv is not None:
+                        counts[gv] = counts.get(gv, 0) + 1
+            if counts:
+                known_value_counts[p_idx] = counts
 
     # Build slot_to_pos mapping for each player (slot_index -> position
     # index within that player's positions list).
@@ -614,6 +774,9 @@ def _setup_solver(
         must_not_have=must_not_have,
         adjacent_constraints=resolved_adjacent,
         slot_to_pos=slot_to_pos,
+        value_multiplicity=vm_constraints,
+        known_value_counts=known_value_counts,
+        unsorted_player_map=unsorted_player_map,
     )
 
 
@@ -770,8 +933,11 @@ def _solve_backward(
         required = must_have.get(p, set())
         forbidden = must_not_have.get(p, set())
         adj_list = adjacent_constraints.get(p, [])
+        vm_list = ctx.value_multiplicity.get(p, [])
+        p_known_counts = ctx.known_value_counts.get(p, {})
         p_slot_to_pos = slot_to_pos.get(p, {})
         track_seen = bool(required or forbidden)
+        need_pos_wires = bool(adj_list or vm_list)
         rem = list(remaining)
         total = [0]
         slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
@@ -808,10 +974,9 @@ def _solve_backward(
                 # appears in this player's composition.
                 if forbidden and forbidden & seen:
                     return
-                # Adjacent constraint check: reconstruct per-position
-                # wire assignment and verify constraints.
-                if adj_list:
-                    # Build position -> wire mapping from composition
+                # Build position -> wire mapping if needed for
+                # adjacent or value multiplicity constraint checking.
+                if need_pos_wires:
                     pos_wires: list[bomb_busters.Wire | None] = [None] * num_pos
                     pos = 0
                     for di in range(num_types):
@@ -821,6 +986,8 @@ def _solve_backward(
                             for _ in range(used):
                                 pos_wires[pos] = w_di
                                 pos += 1
+                # Adjacent constraint check.
+                if adj_list:
                     for adj in adj_list:
                         left_pi = p_slot_to_pos.get(adj.slot_index_left)
                         right_pi = p_slot_to_pos.get(adj.slot_index_right)
@@ -853,6 +1020,31 @@ def _solve_backward(
                         elif isinstance(adj, bomb_busters.AdjacentEqual):
                             if left_gv != right_gv:
                                 return  # Constraint violated
+                # Value multiplicity check: verify that the number
+                # of copies of each constrained value matches the
+                # x1/x2/x3 token requirement.
+                if vm_list:
+                    hidden_counts: dict[int | str, int] = {}
+                    for pw in pos_wires:
+                        if pw is not None:
+                            gv = pw.gameplay_value
+                            hidden_counts[gv] = (
+                                hidden_counts.get(gv, 0) + 1
+                            )
+                    for vm in vm_list:
+                        vm_pi = p_slot_to_pos.get(vm.slot_index)
+                        if vm_pi is None:
+                            continue
+                        vm_wire = pos_wires[vm_pi]
+                        if vm_wire is None:
+                            continue
+                        vm_gv = vm_wire.gameplay_value
+                        total_count = (
+                            hidden_counts.get(vm_gv, 0)
+                            + p_known_counts.get(vm_gv, 0)
+                        )
+                        if total_count != vm.multiplicity.value:
+                            return  # VM constraint violated
                 new_remaining = tuple(rem)
                 sub_total = _solve(pli + 1, new_remaining)[0]
                 if sub_total == 0:
@@ -1088,6 +1280,9 @@ def _guided_mc_sample(
     must_not_have = ctx.must_not_have
     adjacent_constraints = ctx.adjacent_constraints
     slot_to_pos = ctx.slot_to_pos
+    value_multiplicity = ctx.value_multiplicity
+    known_value_counts = ctx.known_value_counts
+    unsorted_player_map = ctx.unsorted_player_map
 
     result: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
     raw_samples: list[dict[tuple[int, int], bomb_busters.Wire]] = []
@@ -1204,8 +1399,9 @@ def _guided_mc_sample(
                 wire = distinct_wires[d]
                 for _ in range(composition[d]):
                     if p != _DISCARD_PLAYER_INDEX:
+                        real_p = unsorted_player_map.get(p, p)
                         assignments.append(
-                            (p, positions[pi].slot_index, wire),
+                            (real_p, positions[pi].slot_index, wire),
                         )
                     player_pos_wires.append(wire)
                     pi += 1
@@ -1245,6 +1441,34 @@ def _guided_mc_sample(
                             break
                 if dead_end:
                     break
+
+            # Value multiplicity check
+            if not dead_end:
+                vm_list = value_multiplicity.get(p)
+                if vm_list:
+                    p_slot_to_pos_vm = slot_to_pos.get(p, {})
+                    p_known = known_value_counts.get(p, {})
+                    hidden_counts: dict[int | str, int] = {}
+                    for pw in player_pos_wires:
+                        gv = pw.gameplay_value
+                        hidden_counts[gv] = (
+                            hidden_counts.get(gv, 0) + 1
+                        )
+                    for vm in vm_list:
+                        vm_pi = p_slot_to_pos_vm.get(vm.slot_index)
+                        if vm_pi is None:
+                            continue
+                        vm_wire = player_pos_wires[vm_pi]
+                        vm_gv = vm_wire.gameplay_value
+                        total_count = (
+                            hidden_counts.get(vm_gv, 0)
+                            + p_known.get(vm_gv, 0)
+                        )
+                        if total_count != vm.multiplicity.value:
+                            dead_end = True
+                            break
+                    if dead_end:
+                        break
 
             # Update pool
             for d in range(num_types):
@@ -1524,11 +1748,22 @@ def _forward_pass_positions(
         frontier = next_frontier
 
     # Filter out discard player entries (slack variables from uncertain
-    # wire groups) — callers only care about real player positions.
-    return {
-        key: counter for key, counter in result.items()
-        if key[0] != _DISCARD_PLAYER_INDEX
-    }
+    # wire groups) and remap unsorted pseudo-player entries back to
+    # real player indices — callers only care about real player positions.
+    unsorted_map = ctx.unsorted_player_map
+    filtered: dict[tuple[int, int], collections.Counter[bomb_busters.Wire]] = {}
+    for key, counter in result.items():
+        p_idx = key[0]
+        if p_idx == _DISCARD_PLAYER_INDEX:
+            continue
+        real_p = unsorted_map.get(p_idx)
+        if real_p is not None:
+            # Remap pseudo-player back to real player
+            real_key = (real_p, key[1])
+            filtered[real_key] = counter
+        else:
+            filtered[key] = counter
+    return filtered
 
 
 def _find_target_positions(
@@ -3017,28 +3252,38 @@ class IndicationChoice:
 def _build_indication_constraints(
     slots: list[bomb_busters.Slot],
     indicate_slot: int | None = None,
+    indicate_parity: bomb_busters.Parity | None = None,
 ) -> list[PositionConstraint]:
     """Build position constraints for hidden slots on a stand.
 
-    When ``indicate_slot`` is specified, that slot is treated as
-    INFO_REVEALED (with its wire's gameplay_value as the info token),
-    and sort-value bounds for neighboring hidden slots are computed
-    from the modified state.
+    When ``indicate_slot`` is specified without ``indicate_parity``,
+    that slot is treated as INFO_REVEALED (standard info token) and
+    sort-value bounds for neighboring hidden slots are computed from
+    the modified state.
+
+    When ``indicate_parity`` is also specified, the indicated slot
+    stays HIDDEN but receives a ``required_parity`` constraint. This
+    models even/odd indication tokens where the exact value is not
+    revealed — only the parity. Neighbors are NOT tightened because
+    the slot's value remains unknown to observers.
 
     Args:
         slots: The stand's slot list (indicating player's own stand).
         indicate_slot: If set, the slot index to treat as indicated.
+        indicate_parity: If set (with ``indicate_slot``), the parity
+            constraint to apply instead of revealing the exact value.
 
     Returns:
         List of PositionConstraint for each hidden slot (excluding
-        the indicated slot if any).
+        the indicated slot for standard indication; including it with
+        a parity constraint for parity indication).
     """
     # Create a working copy with the indication applied
-    if indicate_slot is not None:
+    if indicate_slot is not None and indicate_parity is None:
+        # Standard info token: slot becomes INFO_REVEALED
         work_slots: list[bomb_busters.Slot] = []
         for i, s in enumerate(slots):
             if i == indicate_slot:
-                # Simulate the info token placement
                 work_slots.append(bomb_busters.Slot(
                     wire=s.wire,
                     state=bomb_busters.SlotState.INFO_REVEALED,
@@ -3049,6 +3294,7 @@ def _build_indication_constraints(
             else:
                 work_slots.append(s)
     else:
+        # No indication or parity indication: slots stay as-is
         work_slots = slots
 
     constraints: list[PositionConstraint] = []
@@ -3056,11 +3302,17 @@ def _build_indication_constraints(
         if slot.state != bomb_busters.SlotState.HIDDEN:
             continue
         lower, upper = bomb_busters.get_sort_value_bounds(work_slots, i)
+        parity = (
+            indicate_parity
+            if indicate_slot is not None and i == indicate_slot
+            else None
+        )
         constraints.append(PositionConstraint(
             player_index=0,
             slot_index=i,
             lower_bound=lower,
             upper_bound=upper,
+            required_parity=parity,
         ))
     return constraints
 
@@ -3194,6 +3446,190 @@ def _compute_entropy(
                 pos_entropy -= p * math.log2(p)
         total_entropy += pos_entropy
     return total_entropy
+
+
+def _enumerate_stand_distributions_multiplicity(
+    constraints: list[PositionConstraint],
+    distinct_wires: list[bomb_busters.Wire],
+    pool_counts: tuple[int, ...],
+    indicated_pos: int,
+    required_multiplicity: int,
+    known_value_count: int = 0,
+    target_gameplay_value: int | str | None = None,
+) -> tuple[dict[int, collections.Counter[bomb_busters.Wire]], int]:
+    """Compute per-position wire distributions with a multiplicity filter.
+
+    Like ``_enumerate_stand_distributions()``, but only counts
+    compositions where the gameplay value at the indicated position
+    appears exactly ``required_multiplicity`` times on the stand
+    (including ``known_value_count`` already-known copies from
+    CUT/INFO_REVEALED slots).
+
+    Uses a count-tracking two-pass DP: the standard backward/forward
+    approach with an extra dimension tracking how many copies of the
+    target gameplay value have been placed. Non-target wire types are
+    excluded from ``indicated_pos`` via modified ``max_run`` tables.
+
+    Complexity: O(D × N × max_k × (hidden_target + 1)). With D ≈ 12,
+    N ≈ 10, max_k ≤ 4, hidden_target ≤ 4, this is ~2,400 operations
+    — completing in microseconds.
+
+    Args:
+        constraints: Position constraints for hidden slots, sorted by
+            slot_index.
+        distinct_wires: Sorted list of unique wire types in the pool.
+        pool_counts: Tuple of available counts for each distinct wire
+            type (parallel to distinct_wires).
+        indicated_pos: Position index (within ``constraints``) of the
+            indicated slot. Only wire types with the target gameplay
+            value can occupy this position.
+        required_multiplicity: How many total copies of the indicated
+            wire's gameplay value must exist on the stand (including
+            both hidden and known copies).
+        known_value_count: Number of copies of the indicated wire's
+            value already visible on this stand (CUT/INFO_REVEALED).
+            The hidden count must equal
+            ``required_multiplicity - known_value_count``.
+        target_gameplay_value: The gameplay value whose multiplicity
+            is being constrained. Required — determines which wire
+            types are "target types" that can occupy ``indicated_pos``
+            and whose count is tracked.
+
+    Returns:
+        A tuple of (distributions, total_weight) with the same format
+        as ``_enumerate_stand_distributions()``. Only compositions
+        satisfying the multiplicity constraint contribute.
+    """
+    num_pos = len(constraints)
+    num_types = len(distinct_wires)
+
+    if num_pos == 0:
+        return {}, 0
+
+    # Target: how many hidden copies of the indicated value are needed
+    hidden_target = required_multiplicity - known_value_count
+    if hidden_target < 0:
+        return {}, 0
+
+    # Identify which wire types have the target gameplay value
+    is_target = [False] * num_types
+    if target_gameplay_value is not None:
+        for d in range(num_types):
+            if distinct_wires[d].gameplay_value == target_gameplay_value:
+                is_target[d] = True
+
+    # Precompute max_run with indicated_pos constraint:
+    # Non-target types cannot occupy indicated_pos, so their run is
+    # broken there. This prevents the DP from placing non-target wires
+    # at the indicated position.
+    max_run: list[list[int]] = []
+    for d in range(num_types):
+        w = distinct_wires[d]
+        runs = [0] * (num_pos + 1)
+        for pi in range(num_pos - 1, -1, -1):
+            if not constraints[pi].wire_fits(w):
+                runs[pi] = 0
+            elif not is_target[d] and pi == indicated_pos:
+                runs[pi] = 0
+            else:
+                runs[pi] = runs[pi + 1] + 1
+        max_run.append(runs)
+
+    max_c = hidden_target  # Maximum target-type count to track
+
+    # ── Backward pass ──────────────────────────────────────────
+    # f[d][pi][c] = total weight of compositions that fill positions
+    # pi..N-1 using wire types d..D-1, placing exactly c more copies
+    # of target-type wires among those remaining positions.
+    f = [
+        [[0] * (max_c + 1) for _ in range(num_pos + 1)]
+        for _ in range(num_types + 1)
+    ]
+    f[num_types][num_pos][0] = 1
+
+    for d in range(num_types - 1, -1, -1):
+        for pi in range(num_pos, -1, -1):
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            if is_target[d]:
+                for c in range(max_c + 1):
+                    total = 0
+                    for k in range(min(max_k, c) + 1):
+                        total += (
+                            math.comb(pool_counts[d], k)
+                            * f[d + 1][pi + k][c - k]
+                        )
+                    f[d][pi][c] = total
+            else:
+                for c in range(max_c + 1):
+                    total = 0
+                    for k in range(max_k + 1):
+                        total += (
+                            math.comb(pool_counts[d], k)
+                            * f[d + 1][pi + k][c]
+                        )
+                    f[d][pi][c] = total
+
+    total_weight = f[0][0][hidden_target]
+    if total_weight == 0:
+        return {}, 0
+
+    # ── Forward pass ───────────────────────────────────────────
+    # g[d][pi][c] = accumulated weight reaching state (d, pi) with
+    # c target-type copies already placed among positions 0..pi-1.
+    g = [
+        [[0] * (max_c + 1) for _ in range(num_pos + 1)]
+        for _ in range(num_types + 1)
+    ]
+    g[0][0][0] = 1
+
+    slot_counts: dict[int, collections.Counter[bomb_busters.Wire]] = {}
+
+    for d in range(num_types):
+        w = distinct_wires[d]
+        for pi in range(num_pos + 1):
+            max_k = min(pool_counts[d], num_pos - pi, max_run[d][pi])
+            if is_target[d]:
+                for c in range(max_c + 1):
+                    if g[d][pi][c] == 0:
+                        continue
+                    for k in range(min(max_k, max_c - c) + 1):
+                        coeff = math.comb(pool_counts[d], k)
+                        new_c = c + k
+                        g[d + 1][pi + k][new_c] += g[d][pi][c] * coeff
+                        if k > 0:
+                            remaining_c = hidden_target - new_c
+                            if 0 <= remaining_c <= max_c:
+                                contribution = (
+                                    g[d][pi][c] * coeff
+                                    * f[d + 1][pi + k][remaining_c]
+                                )
+                                for j in range(pi, pi + k):
+                                    counter = slot_counts.get(j)
+                                    if counter is None:
+                                        counter = collections.Counter()
+                                        slot_counts[j] = counter
+                                    counter[w] += contribution
+            else:
+                for c in range(max_c + 1):
+                    if g[d][pi][c] == 0:
+                        continue
+                    remaining_c = hidden_target - c
+                    for k in range(max_k + 1):
+                        coeff = math.comb(pool_counts[d], k)
+                        g[d + 1][pi + k][c] += g[d][pi][c] * coeff
+                        if k > 0 and 0 <= remaining_c <= max_c:
+                            contribution = (
+                                g[d][pi][c] * coeff
+                                * f[d + 1][pi + k][remaining_c]
+                            )
+                            for j in range(pi, pi + k):
+                                counter = slot_counts.get(j)
+                                if counter is None:
+                                    counter = collections.Counter()
+                                    slot_counts[j] = counter
+                                counter[w] += contribution
+
+    return slot_counts, total_weight
 
 
 def rank_indications(
@@ -3343,6 +3779,343 @@ def rank_indications(
         ))
 
     # Sort by information gain descending
+    choices.sort(key=lambda c: c.information_gain, reverse=True)
+    return choices
+
+
+def rank_indications_parity(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> list[IndicationChoice]:
+    """Rank indication choices when using even/odd parity tokens.
+
+    With parity tokens, indication reveals only whether the wire is
+    even or odd — not its exact value. This means:
+
+    - The indicated slot stays HIDDEN (observers can't see the value).
+    - The wire is NOT removed from the pool (its identity is unknown).
+    - Neighbors do NOT get tighter sort-value bounds.
+    - The only new information is a ``required_parity`` constraint on
+      the indicated position, which filters out wires of the wrong
+      parity.
+
+    Since parity indication reveals strictly less information than
+    standard indication, information gains will generally be lower.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+
+    Returns:
+        List of IndicationChoice objects sorted by information_gain
+        descending (best indication first). Each choice's ``wire``
+        field contains the actual wire at the slot (for display), but
+        the information gain reflects only the parity being revealed.
+
+    Raises:
+        ValueError: If the player's stand has unknown wires.
+    """
+    player = game.players[player_index]
+    stand = player.tile_stand
+
+    # Validate all wires are known
+    unknown = [
+        i for i, s in enumerate(stand.slots) if s.wire is None
+    ]
+    if unknown:
+        letters = ", ".join(chr(ord("A") + i) for i in unknown)
+        raise ValueError(
+            f"Cannot compute indication quality: player "
+            f"{player_index} ({player.name}) has unknown wires at "
+            f"slot(s) {letters}. All wire identities must be known."
+        )
+
+    # Build the wire pool (same as standard indication — generic
+    # observer's pool, not the indicating player's own).
+    pool = list(game.wires_in_play)
+    for group in game.uncertain_wire_groups:
+        pool.extend(group.candidates)
+    for p_idx, other_player in enumerate(game.players):
+        if p_idx == player_index:
+            continue
+        for slot in other_player.tile_stand.slots:
+            if slot.state == bomb_busters.SlotState.CUT and slot.wire is not None:
+                if slot.wire in pool:
+                    pool.remove(slot.wire)
+            elif (
+                slot.state == bomb_busters.SlotState.INFO_REVEALED
+                and slot.info_token is not None
+            ):
+                wire = _identify_info_revealed_wire(
+                    game, p_idx,
+                    other_player.tile_stand.slots.index(slot),
+                    slot.info_token,
+                )
+                if wire is not None and wire in pool:
+                    pool.remove(wire)
+
+    pool_counter = collections.Counter(pool)
+    distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
+    pool_counts = tuple(pool_counter[w] for w in distinct)
+
+    # Baseline entropy (all positions hidden, no parity constraints)
+    baseline_constraints = _build_indication_constraints(stand.slots)
+    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+        baseline_constraints, distinct, pool_counts,
+    )
+    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
+
+    # Evaluate each possible parity indication.
+    # Deduplicate by (slot_index, parity): two wires of the same
+    # parity at the same slot produce the same constraint effect.
+    choices: list[IndicationChoice] = []
+    seen: set[tuple[int, str]] = set()
+
+    for s_idx, slot in enumerate(stand.slots):
+        if slot.state != bomb_busters.SlotState.HIDDEN:
+            continue
+        if slot.wire is None:
+            continue
+        if slot.wire.color != bomb_busters.WireColor.BLUE:
+            continue
+
+        value = slot.wire.gameplay_value
+        assert isinstance(value, int)
+        parity = (
+            bomb_busters.Parity.EVEN if value % 2 == 0
+            else bomb_busters.Parity.ODD
+        )
+
+        dedup_key = (s_idx, parity.name)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        # Parity indication: slot stays hidden, wire stays in pool,
+        # only a required_parity constraint is added.
+        after_constraints = _build_indication_constraints(
+            stand.slots,
+            indicate_slot=s_idx,
+            indicate_parity=parity,
+        )
+        after_dist, after_weight = _enumerate_stand_distributions(
+            after_constraints, distinct, pool_counts,
+        )
+        after_entropy = _compute_entropy(after_dist, after_weight)
+
+        ig = baseline_entropy - after_entropy
+        resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
+
+        choices.append(IndicationChoice(
+            slot_index=s_idx,
+            wire=slot.wire,
+            information_gain=ig,
+            uncertainty_resolved=resolved,
+            remaining_entropy=after_entropy,
+        ))
+
+    choices.sort(key=lambda c: c.information_gain, reverse=True)
+    return choices
+
+
+def rank_indications_multiplicity(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> list[IndicationChoice]:
+    """Rank indication choices when using x1/x2/x3 multiplicity tokens.
+
+    With multiplicity tokens, indication reveals how many copies of
+    the wire's gameplay value exist on the stand — not the value
+    itself. This means:
+
+    - The indicated slot stays HIDDEN (observers can't see the value).
+    - The wire is NOT removed from the pool (its identity is unknown).
+    - Neighbors do NOT get tighter sort-value bounds.
+    - The new information is a composition-level constraint: the
+      gameplay value at this position appears exactly M times on the
+      stand (including any already-visible copies from CUT/INFO_REVEALED
+      slots).
+
+    Since multiplicity indication reveals less information than standard
+    indication (the exact value is not revealed), information gains
+    will generally be lower. However, multiplicity constrains the
+    global count of a value, which can significantly narrow
+    possibilities when the multiplicity is low (x1 or x2).
+
+    Multiplicity tokens work with blue wires only. Even/odd tokens
+    are never used in the same mission as multiplicity tokens.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+
+    Returns:
+        List of IndicationChoice objects sorted by information_gain
+        descending (best indication first). Each choice's ``wire``
+        field contains the actual wire at the slot (for display), but
+        the information gain reflects only the multiplicity being
+        revealed.
+
+    Raises:
+        ValueError: If the player's stand has unknown wires.
+    """
+    player = game.players[player_index]
+    stand = player.tile_stand
+
+    # Validate all wires are known
+    unknown = [
+        i for i, s in enumerate(stand.slots) if s.wire is None
+    ]
+    if unknown:
+        letters = ", ".join(chr(ord("A") + i) for i in unknown)
+        raise ValueError(
+            f"Cannot compute indication quality: player "
+            f"{player_index} ({player.name}) has unknown wires at "
+            f"slot(s) {letters}. All wire identities must be known."
+        )
+
+    # Build the wire pool (generic observer's pool)
+    pool = list(game.wires_in_play)
+    for group in game.uncertain_wire_groups:
+        pool.extend(group.candidates)
+    for p_idx, other_player in enumerate(game.players):
+        if p_idx == player_index:
+            continue
+        for slot in other_player.tile_stand.slots:
+            if slot.state == bomb_busters.SlotState.CUT and slot.wire is not None:
+                if slot.wire in pool:
+                    pool.remove(slot.wire)
+            elif (
+                slot.state == bomb_busters.SlotState.INFO_REVEALED
+                and slot.info_token is not None
+            ):
+                wire = _identify_info_revealed_wire(
+                    game, p_idx,
+                    other_player.tile_stand.slots.index(slot),
+                    slot.info_token,
+                )
+                if wire is not None and wire in pool:
+                    pool.remove(wire)
+
+    pool_counter = collections.Counter(pool)
+    distinct = sorted(pool_counter.keys(), key=lambda w: w.sort_value)
+    pool_counts = tuple(pool_counter[w] for w in distinct)
+
+    # Baseline entropy (all positions hidden, no multiplicity constraints)
+    baseline_constraints = _build_indication_constraints(stand.slots)
+    baseline_dist, baseline_weight = _enumerate_stand_distributions(
+        baseline_constraints, distinct, pool_counts,
+    )
+    baseline_entropy = _compute_entropy(baseline_dist, baseline_weight)
+
+    # Precompute known value counts on this stand (CUT/INFO_REVEALED)
+    known_counts: dict[int | str, int] = {}
+    for slot in stand.slots:
+        if slot.state != bomb_busters.SlotState.HIDDEN and slot.wire is not None:
+            gv = slot.wire.gameplay_value
+            known_counts[gv] = known_counts.get(gv, 0) + 1
+
+    # Precompute slot_index -> position_index mapping within
+    # baseline_constraints (same as any after_constraints since
+    # multiplicity indication doesn't modify slot states or bounds).
+    slot_to_pos: dict[int, int] = {}
+    for ci, c in enumerate(baseline_constraints):
+        slot_to_pos[c.slot_index] = ci
+
+    # Precompute which gameplay values can fit at each position
+    # (based on sort-value bounds).
+    possible_gvs_at_pos: dict[int, set[int | str]] = {}
+    for ci, c in enumerate(baseline_constraints):
+        gvs: set[int | str] = set()
+        for d, w in enumerate(distinct):
+            if c.wire_fits(w):
+                gvs.add(w.gameplay_value)
+        possible_gvs_at_pos[ci] = gvs
+
+    # Precompute pool count per gameplay value.
+    pool_count_by_gv: dict[int | str, int] = {}
+    for d, w in enumerate(distinct):
+        gv = w.gameplay_value
+        pool_count_by_gv[gv] = pool_count_by_gv.get(gv, 0) + pool_counts[d]
+
+    # Evaluate each possible multiplicity indication.
+    # Deduplicate by (slot_index, multiplicity): two wires at the same
+    # slot with the same multiplicity produce the same constraint effect.
+    choices: list[IndicationChoice] = []
+    seen: set[tuple[int, int]] = set()
+
+    for s_idx, slot in enumerate(stand.slots):
+        if slot.state != bomb_busters.SlotState.HIDDEN:
+            continue
+        if slot.wire is None:
+            continue
+        if slot.wire.color != bomb_busters.WireColor.BLUE:
+            continue
+
+        value = slot.wire.gameplay_value
+        assert isinstance(value, int)
+
+        # Count total copies of this value on the stand (hidden + known)
+        total_on_stand = sum(
+            1 for s in stand.slots
+            if s.wire is not None and s.wire.gameplay_value == value
+        )
+
+        dedup_key = (s_idx, total_on_stand)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        indicated_pos = slot_to_pos.get(s_idx)
+        if indicated_pos is None:
+            continue
+
+        # The observer sees "xM at position [G]" but doesn't know which
+        # value is there. Sum over all possible gameplay values V' that
+        # could be at the indicated position and satisfy the multiplicity
+        # constraint (V' appears exactly M times total on the stand).
+        required_mult = total_on_stand  # xM token value
+        merged_dist: dict[int, collections.Counter[bomb_busters.Wire]] = {}
+        merged_weight = 0
+
+        for gv in possible_gvs_at_pos[indicated_pos]:
+            gv_known = known_counts.get(gv, 0)
+            gv_hidden_target = required_mult - gv_known
+            if gv_hidden_target < 0:
+                continue
+            if gv_hidden_target > pool_count_by_gv.get(gv, 0):
+                continue
+
+            dist_v, weight_v = _enumerate_stand_distributions_multiplicity(
+                baseline_constraints, distinct, pool_counts,
+                indicated_pos=indicated_pos,
+                required_multiplicity=required_mult,
+                known_value_count=gv_known,
+                target_gameplay_value=gv,
+            )
+            merged_weight += weight_v
+            for pos_idx, counter in dist_v.items():
+                if pos_idx not in merged_dist:
+                    merged_dist[pos_idx] = collections.Counter()
+                merged_dist[pos_idx] += counter
+
+        after_entropy = _compute_entropy(merged_dist, merged_weight)
+
+        ig = baseline_entropy - after_entropy
+        resolved = ig / baseline_entropy if baseline_entropy > 0 else 0.0
+
+        choices.append(IndicationChoice(
+            slot_index=s_idx,
+            wire=slot.wire,
+            information_gain=ig,
+            uncertainty_resolved=resolved,
+            remaining_entropy=after_entropy,
+        ))
+
     choices.sort(key=lambda c: c.information_gain, reverse=True)
     return choices
 
@@ -3730,5 +4503,186 @@ def print_indication_analysis(
             f"  {i:>2}. {ig_str} bits  "
             f"[{_C.BOLD}{letter}{_C.RESET}] = {val}"
             f"  {_C.DIM}({pct_str} resolved){_C.RESET}"
+        )
+    print()
+
+
+def print_indication_analysis_parity(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> None:
+    """Print a parity indication quality analysis for a player.
+
+    Like ``print_indication_analysis()`` but for even/odd parity tokens.
+    Shows each possible indication choice ranked by information gain,
+    with the parity (E/O) revealed rather than the exact value.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+    """
+    player = game.players[player_index]
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print(
+        f"{_C.BOLD}Parity Indication Analysis for "
+        f"{player.name} (Player {player_index}){_C.RESET}"
+    )
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print()
+
+    # Show the player's stand for context
+    status_line, values_line, letters_line = player.tile_stand.stand_lines()
+    prefix = "    "
+    print(f"{prefix}{status_line}")
+    print(f"{prefix}{values_line}")
+    print(f"{prefix}{letters_line}")
+    print()
+
+    choices = rank_indications_parity(game, player_index)
+
+    if not choices:
+        print(f"  {_C.DIM}No blue wires available to indicate.{_C.RESET}")
+        return
+
+    # Show baseline entropy
+    baseline = choices[0].remaining_entropy + choices[0].information_gain
+    print(
+        f"  {_C.DIM}Baseline uncertainty: "
+        f"{baseline:.2f} bits{_C.RESET}"
+    )
+    print()
+
+    # Parity indication thresholds — calibrated from 500 random
+    # 5-player games (all choices, n=24000). Parity reveals only
+    # even/odd, so IG is much lower than standard indication.
+    # Mean ≈ 5.0%, std ≈ 1.5%.
+    #   Green:  ≥ 7%   (above mean + 1σ — excellent)
+    #   Blue:   ≥ 5%   (above mean — good)
+    #   Yellow: ≥ 3.5% (above mean - 1σ — moderate)
+    #   Red:    < 3.5% (below mean - 1σ — poor)
+    print(f"  {_C.BOLD}Ranked parity indication choices:{_C.RESET}")
+    print()
+    for i, choice in enumerate(choices, 1):
+        letter = _slot_letter(choice.slot_index)
+        value = choice.wire.gameplay_value
+        assert isinstance(value, int)
+        parity_label = "E" if value % 2 == 0 else "O"
+        parity_color = "\033[96m"  # cyan for parity tokens
+
+        ig = choice.information_gain
+        pct = choice.uncertainty_resolved
+        if pct >= 0.07:
+            ig_str = f"{_C.GREEN}{_C.BOLD}{ig:>5.2f}{_C.RESET}"
+        elif pct >= 0.05:
+            ig_str = f"{_C.BLUE}{ig:>5.2f}{_C.RESET}"
+        elif pct >= 0.035:
+            ig_str = f"{_C.YELLOW}{ig:>5.2f}{_C.RESET}"
+        else:
+            ig_str = f"{_C.RED}{ig:>5.2f}{_C.RESET}"
+
+        pct_str = f"{pct:.1%}"
+
+        print(
+            f"  {i:>2}. {ig_str} bits  "
+            f"[{_C.BOLD}{letter}{_C.RESET}] "
+            f"{parity_color}{parity_label}{_C.RESET}"
+            f"  {_C.DIM}(actual: {value}, {pct_str} resolved){_C.RESET}"
+        )
+    print()
+
+
+def print_indication_analysis_multiplicity(
+    game: bomb_busters.GameState,
+    player_index: int,
+) -> None:
+    """Print a multiplicity indication quality analysis for a player.
+
+    Like ``print_indication_analysis()`` but for x1/x2/x3 multiplicity
+    tokens. Shows each possible indication choice ranked by information
+    gain, with the multiplicity (x1/x2/x3) revealed rather than the
+    exact value.
+
+    Args:
+        game: The current game state. The specified player must have
+            all wire identities known on their stand.
+        player_index: Index of the player choosing which wire to
+            indicate.
+    """
+    player = game.players[player_index]
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print(
+        f"{_C.BOLD}Multiplicity Indication Analysis for "
+        f"{player.name} (Player {player_index}){_C.RESET}"
+    )
+    print(f"{_C.BOLD}{'─' * 60}{_C.RESET}")
+    print()
+
+    # Show the player's stand for context
+    status_line, values_line, letters_line = player.tile_stand.stand_lines()
+    prefix = "    "
+    print(f"{prefix}{status_line}")
+    print(f"{prefix}{values_line}")
+    print(f"{prefix}{letters_line}")
+    print()
+
+    choices = rank_indications_multiplicity(game, player_index)
+
+    if not choices:
+        print(f"  {_C.DIM}No blue wires available to indicate.{_C.RESET}")
+        return
+
+    # Show baseline entropy
+    baseline = choices[0].remaining_entropy + choices[0].information_gain
+    print(
+        f"  {_C.DIM}Baseline uncertainty: "
+        f"{baseline:.2f} bits{_C.RESET}"
+    )
+    print()
+
+    print(f"  {_C.BOLD}Ranked multiplicity indication choices:{_C.RESET}")
+    print()
+    for i, choice in enumerate(choices, 1):
+        letter = _slot_letter(choice.slot_index)
+        value = choice.wire.gameplay_value
+        assert isinstance(value, int)
+
+        # Count total copies of this value on the stand
+        total_on_stand = sum(
+            1 for s in player.tile_stand.slots
+            if s.wire is not None and s.wire.gameplay_value == value
+        )
+        mult_label = f"x{total_on_stand}"
+        mult_color = "\033[95m"  # magenta for multiplicity tokens
+
+        ig = choice.information_gain
+        pct = choice.uncertainty_resolved
+        # Multiplicity indication thresholds — calibrated from 500
+        # random 5-player games (all choices, n=24000). Multiplicity
+        # reveals only xM count, so IG is lower than standard or
+        # parity. Distribution is heavily skewed (22% negative values
+        # from sum-of-marginals entropy artifact), so percentile-based
+        # thresholds are used instead of mean±σ.
+        #   Green:  ≥ 5%   (excellent)
+        #   Blue:   ≥ 3.5% (good)
+        #   Yellow: ≥ 1%   (moderate)
+        #   Red:    < 1%   (poor, includes negative IG)
+        if pct >= 0.05:
+            ig_str = f"{_C.GREEN}{_C.BOLD}{ig:>5.2f}{_C.RESET}"
+        elif pct >= 0.035:
+            ig_str = f"{_C.BLUE}{ig:>5.2f}{_C.RESET}"
+        elif pct >= 0.01:
+            ig_str = f"{_C.YELLOW}{ig:>5.2f}{_C.RESET}"
+        else:
+            ig_str = f"{_C.RED}{ig:>5.2f}{_C.RESET}"
+
+        pct_str = f"{pct:.1%}"
+
+        print(
+            f"  {i:>2}. {ig_str} bits  "
+            f"[{_C.BOLD}{letter}{_C.RESET}] "
+            f"{mult_color}{mult_label}{_C.RESET}"
+            f"  {_C.DIM}(actual: {value}, {pct_str} resolved){_C.RESET}"
         )
     print()

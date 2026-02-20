@@ -175,8 +175,142 @@ When other players have already indicated (clockwise from captain), their public
 1. Remove their indicated wire from the pool (it is known to be on their stand).
 2. Do not directly constrain the current player's stand, but the pool reduction can subtly shift which indications are most valuable.
 
+## Parity Indication (Even/Odd Tokens)
+
+Some missions use even/odd tokens instead of standard info tokens. With parity indication, the indicated slot reveals only whether the wire is **even** (2, 4, 6, 8, 10, 12) or **odd** (1, 3, 5, 7, 9, 11) — not its exact value.
+
+### Key Differences from Standard Indication
+
+| Aspect | Standard Info Token | Even/Odd Parity Token |
+|--------|--------------------|-----------------------|
+| Value revealed | Exact number (e.g., "7") | Only parity (even or odd) |
+| Slot state | Becomes INFO_REVEALED | Stays HIDDEN |
+| Wire in pool | Removed (identity known) | Stays in pool (identity unknown) |
+| Neighbor bounds | Tightened by known value | NOT tightened (value unknown) |
+| New constraint | None (slot is resolved) | `required_parity` on the slot |
+
+### How Parity Information Gain is Computed
+
+The parity analysis uses the same two-pass DP infrastructure as standard indication, but with different indication semantics:
+
+1. The indicated slot stays HIDDEN (not converted to INFO_REVEALED).
+2. The wire is NOT removed from the pool (its exact value is unknown).
+3. A `required_parity` constraint is added to the slot's `PositionConstraint`, which filters out wires of the wrong parity via `wire_fits()`.
+4. Neighboring slots do NOT get tighter sort-value bounds.
+
+The information gain is computed identically: baseline entropy minus remaining entropy after the parity constraint is applied.
+
+### Expected Information Gain
+
+Parity indication reveals strictly less information than standard indication (it partitions possibilities into two groups instead of identifying the exact wire). Typical parity information gains are 1-2 bits per indication, compared to 4-8 bits for standard indication. The ranking of choices still follows the same principle: indicate where the parity constraint eliminates the most uncertainty.
+
+Even/odd tokens are never used in missions with yellow wires. The parity analysis functions (`rank_indications_parity()`, `print_indication_analysis_parity()`) only consider blue wires.
+
+#### Empirical benchmarks (parity)
+
+The following thresholds were derived from 500 random 5-player games (blue wires 1–12, all choices per player, n=24,000). Mean uncertainty resolved per parity indication is approximately 5.0%, with a standard deviation of approximately 1.5%.
+
+| Range | Interpretation | Statistical context |
+|-------|---------------|---------------------|
+| < 3.5% | Poor. The parity constraint barely narrows possibilities. | Below mean − 1σ |
+| 3.5% – 5% | Moderate. Useful partitioning for teammates. | Between mean − 1σ and mean |
+| 5% – 7% | Good. Noticeably reduces stand uncertainty. | Between mean and mean + 1σ |
+| ≥ 7% | Excellent. Strong partitioning effect. | Above mean + 1σ |
+
+These thresholds match the color coding used in the parity terminal display (red, yellow, blue, green respectively).
+
+## Multiplicity Indication (x1/x2/x3 Tokens)
+
+Some missions use x1/x2/x3 tokens instead of standard info tokens. With multiplicity indication, the indicated slot reveals **how many copies of that wire's value exist on the entire stand** (including already-cut wires) — but not the value itself.
+
+### Key Differences from Standard Indication
+
+| Aspect | Standard Info Token | x1/x2/x3 Multiplicity Token |
+|--------|--------------------|-----------------------------|
+| Value revealed | Exact number (e.g., "7") | NOT revealed |
+| Multiplicity revealed | Not directly | xM: how many copies of this value on stand |
+| Slot state | Becomes INFO_REVEALED | Stays HIDDEN |
+| Wire in pool | Removed (identity known) | Stays in pool (identity unknown) |
+| Neighbor bounds | Tightened by known value | NOT tightened (value unknown) |
+| New constraint | None (slot is resolved) | Count constraint: exactly M copies of the (unknown) value on the stand |
+
+### How Multiplicity Information Gain is Computed
+
+Multiplicity indication is more complex than standard or parity indication because the constraint is **global** (applies to the count of a value across the entire stand) rather than **local** (constraining a single position). Additionally, the observer does not know which value is at the indicated position — they only see the xM token.
+
+#### Count-Tracking Two-Pass DP
+
+The core computation uses an extended version of the standard two-pass DP that tracks how many copies of a target wire value have been placed. The state space is `(wire_type, position, target_count)`:
+
+**Backward pass** — Computes $f[d][\pi][c]$: the total combinatorial weight of valid compositions that fill positions $\pi \ldots N{-}1$ using wire types $d \ldots D{-}1$, with exactly $c$ more copies of the target gameplay value still needed:
+
+$$f[d][\pi][c] = \sum_{k=0}^{k_{\max}} \binom{c_d}{k} \cdot f[d{+}1][\pi{+}k][\text{new\_c}]$$
+
+where $\text{new\_c} = c - k$ if wire type $d$ has the target gameplay value, or $c$ otherwise.
+
+Base case: $f[D][N][0] = 1$ (all types used, all positions filled, exact target count met).
+
+**Forward pass** — Propagates $g[d][\pi][c]$ with the same count tracking, distributing per-position wire counts weighted by both forward and backward values.
+
+**Indicated position handling**: At the indicated position, only the target wire type (or non-target types if $k > 0$ target copies are still needed) can be placed. Non-target wire types have their `max_run` set to 0 at the indicated position, preventing invalid placements.
+
+**Complexity:** $O(D \times N \times k_{\max} \times (M+1))$ where $M$ is the required multiplicity (1, 2, or 3). This adds a factor of at most 4 to the standard DP, keeping computation in the microsecond range.
+
+#### Summing Over Unknown Values
+
+The observer sees only the xM token, not the value at the indicated position. To correctly compute information gain, the analysis must consider **all possible gameplay values** that could be at the indicated position.
+
+For each candidate indication (each blue wire on the stand), the analysis:
+
+1. Determines the multiplicity $M$ (total copies of this value on the stand, including cut wires).
+2. For each possible gameplay value $V'$ that could fit at the indicated position (based on sort-value bounds):
+   a. Computes how many hidden copies of $V'$ must exist on the stand: $M_{\text{hidden}} = M - \text{known\_count}(V')$.
+   b. Skips $V'$ if $M_{\text{hidden}} < 0$ (impossible) or if the pool doesn't have enough copies.
+   c. Runs the count-tracking DP conditioned on the target value being $V'$ with exactly $M_{\text{hidden}}$ hidden copies needed.
+3. **Merges** the distributions from all candidate values by summing their per-position counters and total weights.
+4. Computes entropy from the merged distribution.
+
+This summation correctly models the observer's uncertainty: after seeing xM, they don't know which value is at the position, so the remaining uncertainty is a weighted average over all compatible values.
+
+$$H_{\text{after}} = H\left(\text{merge}\left(\bigcup_{V' \in \text{possible}} \text{DP}(V', M_{\text{hidden}}(V'))\right)\right)$$
+
+### Expected Information Gain
+
+Multiplicity indication reveals less information than either standard or parity indication. The xM token constrains the global count of an unknown value, which is a weaker constraint than knowing the value (standard) or even its parity (even/odd). Typical multiplicity information gains are 0.5-1.5 bits per indication, compared to 4-8 bits for standard and 1-2 bits for parity.
+
+Multiplicity tokens can be used with yellow wires (unlike even/odd tokens). The multiplicity analysis functions (`rank_indications_multiplicity()`, `print_indication_analysis_multiplicity()`) consider only blue wires when computing information gain.
+
+#### Negative information gain
+
+Unlike standard and parity indication, multiplicity indication can produce **negative information gain** for some choices. This occurs because the metric uses sum-of-marginals entropy (an upper bound on joint entropy), and the multiplicity constraint can make some per-position marginal distributions *more uniform* even though the total number of valid compositions decreases. Approximately 22% of all multiplicity indication choices (not just the best) have negative IG.
+
+This is a measurement artifact, not a real increase in uncertainty. The multiplicity constraint always reduces the set of valid compositions (true joint entropy always decreases). The sum-of-marginals metric simply overestimates entropy in some cases. For ranking purposes, choices with negative IG are genuinely worse than those with positive IG — they provide the least useful information to teammates.
+
+#### Empirical benchmarks (multiplicity)
+
+The following thresholds were derived from 500 random 5-player games (blue wires 1–12, all choices per player, n=24,000). Due to the heavily skewed distribution (22% negative values), percentile-based thresholds are used instead of mean±σ.
+
+| Range | Interpretation |
+|-------|---------------|
+| < 1% | Poor. Minimal constraint on the stand. Includes negative IG. |
+| 1% – 3.5% | Moderate. Some useful information for teammates. |
+| 3.5% – 5% | Good. Noticeably constrains possibilities. |
+| ≥ 5% | Excellent. Strong multiplicity constraint. |
+
+These thresholds match the color coding used in the multiplicity terminal display (red, yellow, blue, green respectively).
+
+### Comparison of Indication Types
+
+| Metric | Standard | Parity (E/O) | Multiplicity (xM) |
+|--------|----------|-------------|-------------------|
+| Best indication mean | ~27% resolved | ~8% resolved | ~6% resolved |
+| All choices mean | ~19% resolved | ~5% resolved | ~2.4% resolved |
+| Typical IG range | 4–8 bits | 1–2 bits | 0.5–1.5 bits |
+| Can have negative IG? | No | No | Yes (~22% of choices) |
+| Works with yellow wires? | Yes | No | Yes |
+
 ## Limitations
 
-- **Marginal vs. joint entropy**: The metric sums per-position marginal entropies, which is an upper bound on the true joint entropy. For ranking purposes, this is appropriate since teammates reason about positions independently when deciding where to cut.
+- **Marginal vs. joint entropy**: The metric sums per-position marginal entropies, which is an upper bound on the true joint entropy. For ranking purposes, this is appropriate since teammates reason about positions independently when deciding where to cut. This approximation is the cause of negative IG values in multiplicity indication.
 - **Generic observer model**: The metric uses the full complement pool (all wires in play minus the indicating player's wires). Individual observers have smaller pools (they also know their own wires), which means the actual entropy reduction they experience may differ slightly. The relative ranking of indication choices is robust to this.
 - **Uncertain (X-of-Y) wire groups**: Currently handled by including all candidates in the pool, which slightly overestimates uncertainty. The ranking remains valid.

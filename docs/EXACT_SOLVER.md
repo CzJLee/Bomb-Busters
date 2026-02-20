@@ -202,6 +202,10 @@ The solver incorporates the following information:
 | `MustNotHaveValue` constraints | Post-composition check — if any forbidden value appears in the player's assignment, the composition is pruned |
 | `AdjacentNotEqual` constraints | Post-composition check — if two adjacent hidden slots are assigned wires with the same gameplay value, the composition is pruned. When one slot is known (CUT/INFO_REVEALED), the constraint tightens the hidden slot's `PositionConstraint` bounds during setup |
 | `AdjacentEqual` constraints | Post-composition check — if two adjacent hidden slots are assigned wires with different gameplay values, the composition is pruned. When one slot is known, same bounds-tightening as above |
+| `SlotParity` constraints | Enforced via `PositionConstraint.required_parity` in `wire_fits()` — wires of the wrong parity are filtered during `max_run` precomputation, so invalid placements never enter the composition enumeration |
+| `SlotExcludedValue` constraints | Enforced via `PositionConstraint.excluded_values` in `wire_fits()` — excluded wire values are filtered during `max_run` precomputation |
+| `UnsortedSlot` constraints | Unsorted positions get wide bounds (0.0, 13.0) and are placed in a pseudo-player group (separate from the player's sorted positions). This prevents them from constraining neighboring sorted positions via sort-value bounds |
+| `ValueMultiplicity` constraints | Post-composition check — after building the position-to-wire mapping, counts occurrences of the constrained wire's gameplay value (hidden assignments + precomputed known-slot counts). If the total doesn't match the required multiplicity, the composition is pruned |
 
 **What the solver does NOT explicitly deduce:**
 

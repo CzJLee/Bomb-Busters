@@ -24,6 +24,8 @@ class _Colors:
     YELLOW = "\033[93m"
     GREEN = "\033[92m"
     ORANGE = "\033[38;5;208m"
+    CYAN = "\033[96m"
+    MAGENTA = "\033[95m"
     DIM = "\033[2m"
     BOLD = "\033[1m"
     RESET = "\033[0m"
@@ -203,11 +205,31 @@ class MustNotHaveValue(SlotConstraint):
 
 
 @dataclasses.dataclass(frozen=True)
+class SlotExcludedValue(SlotConstraint):
+    """A slot is known NOT to have a specific value (false info token).
+
+    Used when a false info token is placed on a wire, indicating
+    "this wire is NOT value N". Only applies to blue wire values.
+
+    Attributes:
+        slot_index: The slot this constraint applies to.
+        excluded_value: The blue wire value (1-12) that this slot
+            is known NOT to be.
+    """
+    slot_index: int
+    excluded_value: int
+
+    def describe(self) -> str:
+        letter = chr(ord("A") + self.slot_index)
+        return f"P{self.player_index} [{letter}] != {self.excluded_value}"
+
+
+@dataclasses.dataclass(frozen=True)
 class SlotParity(SlotConstraint):
     """A slot is known to be even or odd from even/odd indicator tokens.
 
-    Not enforced by the solver in this version — reserved for future
-    indicator token system.
+    Enforced by the solver via ``PositionConstraint.required_parity``.
+    Even/odd tokens are only used with blue wires (never yellow or red).
 
     Attributes:
         slot_index: The slot this constraint applies to.
@@ -225,8 +247,9 @@ class SlotParity(SlotConstraint):
 class ValueMultiplicity(SlotConstraint):
     """Wire value appears exactly N times on this stand (x1/x2/x3 tokens).
 
-    Not enforced by the solver in this version — reserved for future
-    indicator token system.
+    Enforced by the solver as a post-composition check. The solver
+    counts occurrences of the wire's gameplay value across all
+    positions (hidden + known) and prunes if the total doesn't match.
 
     Attributes:
         slot_index: The slot the token is placed on.
@@ -247,8 +270,8 @@ class ValueMultiplicity(SlotConstraint):
 class UnsortedSlot(SlotConstraint):
     """A slot is not sorted with the rest of the stand (X tokens).
 
-    Not enforced by the solver in this version — reserved for future
-    indicator token system.
+    Enforced by the solver by separating unsorted positions into
+    pseudo-players with unconstrained sort-value bounds (0.0, 13.0).
 
     Attributes:
         slot_index: The unsorted slot index.
@@ -471,10 +494,22 @@ class Slot:
         state: Current state of the slot (HIDDEN, CUT, or INFO_REVEALED).
         info_token: Value shown by an info token after a failed dual cut.
             int 1-12 for blue wires, 'YELLOW' for yellow wires, None if no token.
+        parity: Even/odd indicator token on this slot, or None.
+        multiplicity: x1/x2/x3 indicator token on this slot, or None.
+        is_unsorted: True if this slot has an X (unsorted) token.
+        excluded_value: Blue wire value (1-12) this slot is known NOT
+            to be (false info token), or None.
+        required_color: If set, restricts this slot to wires of this
+            color (e.g., from a color prefix in token notation).
     """
     wire: Wire | None
     state: SlotState = SlotState.HIDDEN
     info_token: int | str | None = None
+    parity: Parity | None = None
+    multiplicity: Multiplicity | None = None
+    is_unsorted: bool = False
+    excluded_value: int | None = None
+    required_color: WireColor | None = None
 
     @property
     def is_cut(self) -> bool:
@@ -535,6 +570,31 @@ class Slot:
                 colored = f"{_Colors.BOLD}{token_str}{_Colors.RESET}"
             return token_str, colored
 
+    def indicator_label(self) -> tuple[str, str] | None:
+        """Return the display label for any indicator token on this slot.
+
+        Returns:
+            A tuple of (plain_text_label, ansi_colored_label) if this
+            slot has an indicator token, or None if no indicator is present.
+            The plain label is used for width calculations.
+        """
+        if self.parity is not None:
+            plain = self.parity.name[0]  # "E" or "O"
+            colored = f"{_Colors.CYAN}{plain}{_Colors.RESET}"
+            return plain, colored
+        if self.multiplicity is not None:
+            plain = f"{self.multiplicity.value}x"
+            colored = f"{_Colors.MAGENTA}{plain}{_Colors.RESET}"
+            return plain, colored
+        if self.is_unsorted:
+            colored = f"{_Colors.ORANGE}X{_Colors.RESET}"
+            return "X", colored
+        if self.excluded_value is not None:
+            plain = f"!{self.excluded_value}"
+            colored = f"{_Colors.BOLD}{plain}{_Colors.RESET}"
+            return plain, colored
+        return None
+
     def __str__(self) -> str:
         _, colored = self.value_label()
         return colored
@@ -581,32 +641,444 @@ def _parse_wire_value(token: str) -> Wire:
         return Wire(WireColor.BLUE, float(n))
 
 
+def _has_indicator_prefix(rest: str) -> bool:
+    """Check if a string starts with an indicator token prefix.
+
+    Used to disambiguate ``y``/``r`` as color prefixes vs. wire color
+    letters. When ``y``/``r`` is followed by an indicator prefix char,
+    they are color prefixes; otherwise they are wire color prefixes
+    (``Y4`` = cut yellow-4, ``R5`` = cut red-5).
+
+    Indicator prefix chars: ``E``, ``O``, ``X``, ``!``, ``?``, ``i``,
+    or a digit followed by ``x`` (multiplicity like ``2x``).
+
+    Args:
+        rest: The remaining string after stripping the color prefix.
+
+    Returns:
+        True if the rest starts with an indicator prefix.
+    """
+    if not rest:
+        return True  # bare "b", "y", "r" → color prefix + implicit "?"
+    first = rest[0].upper()
+    if first in ("E", "O", "X", "!", "?", "I"):
+        return True
+    # Check for digit+x (multiplicity): "1x", "2x", "3x"
+    if first.isdigit() and len(rest) > 1 and rest[1].lower() == "x":
+        return True
+    return False
+
+
+def _parse_info_token(rest: str, original: str) -> Slot:
+    """Parse an info-revealed token (``i`` prefix already stripped).
+
+    Args:
+        rest: The string after ``i`` prefix.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Slot with INFO_REVEALED state.
+
+    Raises:
+        ValueError: If the token cannot be parsed.
+    """
+    if not rest:
+        raise ValueError(f"Info token missing value: {original!r}")
+    upper_rest = rest.upper()
+    # Red info tokens do not exist (cutting red = game over)
+    if upper_rest.startswith("R"):
+        raise ValueError(
+            f"Red info tokens do not exist: {original!r}. "
+            f"Use '?R{rest[1:]}' for a hidden red wire known "
+            f"to the observer."
+        )
+    if upper_rest == "Y":
+        # iY — yellow info token, exact wire unknown to observer
+        return Slot(wire=None, state=SlotState.INFO_REVEALED,
+                    info_token="YELLOW")
+    if upper_rest.startswith("Y"):
+        # iYN — yellow info token, observer knows exact wire
+        num_str = rest[1:]
+        try:
+            n = int(num_str)
+        except ValueError:
+            raise ValueError(
+                f"Invalid yellow info token number: {original!r}"
+            )
+        return Slot(
+            wire=Wire(WireColor.YELLOW, n + 0.1),
+            state=SlotState.INFO_REVEALED,
+            info_token="YELLOW",
+        )
+    # iN — blue info token (a numeric info token is always blue)
+    try:
+        value = int(rest)
+    except ValueError:
+        raise ValueError(f"Invalid info token value: {original!r}")
+    return Slot(
+        wire=Wire(WireColor.BLUE, float(value)),
+        state=SlotState.INFO_REVEALED,
+        info_token=value,
+    )
+
+
+def _parse_hidden_value(rest: str, original: str) -> Wire | None:
+    """Parse the wire value after a ``?`` in a hidden token.
+
+    Args:
+        rest: The string after ``?``.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Wire object, or None if no value is specified.
+
+    Raises:
+        ValueError: If the value cannot be parsed.
+    """
+    if not rest:
+        return None
+    return _parse_wire_value(rest)
+
+
+def _parse_parity_token(
+    rest: str,
+    parity: Parity,
+    required_color: WireColor | None,
+    original: str,
+) -> Slot:
+    """Parse an even/odd indicator token (``E``/``O`` already identified).
+
+    Even/odd tokens are ONLY used with blue wires. They cannot be
+    combined with yellow or red wires.
+
+    Formats:
+        ``E`` / ``O``       — HIDDEN, parity known, wire unknown
+        ``E?4`` / ``O?5``   — HIDDEN, parity known, god-mode wire known
+        ``E4`` / ``O5``     — REJECTED (ambiguous, use ``E?4`` or ``4``)
+
+    Args:
+        rest: The string after ``E`` or ``O``.
+        parity: The parity type (EVEN or ODD).
+        required_color: Color prefix, if any.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Slot with parity metadata.
+
+    Raises:
+        ValueError: If the format is invalid.
+    """
+    # Validate: even/odd cannot be used with yellow or red
+    if required_color in (WireColor.YELLOW, WireColor.RED):
+        raise ValueError(
+            f"Even/odd tokens cannot be used with "
+            f"{required_color.name.lower()} wires: {original!r}"
+        )
+
+    if not rest:
+        # E / O — hidden, wire unknown
+        return Slot(
+            wire=None, state=SlotState.HIDDEN,
+            parity=parity, required_color=required_color,
+        )
+
+    # Must start with ? for god-mode value
+    if rest[0] == "?":
+        value_str = rest[1:]
+        if not value_str:
+            # E? — same as E (hidden unknown)
+            return Slot(
+                wire=None, state=SlotState.HIDDEN,
+                parity=parity, required_color=required_color,
+            )
+        # E?4 — hidden with god-mode known value
+        wire = _parse_wire_value(value_str)
+        if wire.color != WireColor.BLUE:
+            raise ValueError(
+                f"Even/odd tokens can only be used with blue wires, "
+                f"got {wire.color.name.lower()}: {original!r}"
+            )
+        return Slot(
+            wire=wire, state=SlotState.HIDDEN,
+            parity=parity, required_color=required_color,
+        )
+
+    # E4, O5 — rejected (ambiguous)
+    if rest[0].isdigit():
+        raise ValueError(
+            f"Ambiguous parity token {original!r}: use "
+            f"'{original[0]}?{rest}' for hidden with known value, "
+            f"or '{rest}' for a cut wire"
+        )
+
+    raise ValueError(f"Invalid parity token: {original!r}")
+
+
+def _parse_multiplicity_token(
+    mult_char: str,
+    rest: str,
+    required_color: WireColor | None,
+    original: str,
+) -> Slot:
+    """Parse a multiplicity indicator token (``Nx`` already identified).
+
+    Multiplicity tokens can be used with blue or yellow wires, but
+    NOT red wires.
+
+    Formats:
+        ``1x`` / ``2x`` / ``3x``       — HIDDEN, multiplicity known
+        ``2x7``                         — CUT, multiplicity known
+        ``2x?7``                        — HIDDEN, god-mode wire known
+        ``2xY4``                        — CUT yellow, multiplicity known
+        ``2x?Y4``                       — HIDDEN yellow, god-mode known
+
+    Args:
+        mult_char: The multiplicity digit ('1', '2', or '3').
+        rest: The string after ``Nx`` (e.g., ``7``, ``?7``, ``Y4``).
+        required_color: Color prefix, if any.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Slot with multiplicity metadata.
+
+    Raises:
+        ValueError: If the format is invalid.
+    """
+    mult_value = int(mult_char)
+    mult_map = {1: Multiplicity.SINGLE, 2: Multiplicity.DOUBLE,
+                3: Multiplicity.TRIPLE}
+    if mult_value not in mult_map:
+        raise ValueError(
+            f"Invalid multiplicity value {mult_value}: {original!r}"
+        )
+    multiplicity = mult_map[mult_value]
+
+    # Validate: cannot be used with red
+    if required_color == WireColor.RED:
+        raise ValueError(
+            f"Multiplicity tokens cannot be used with red wires: "
+            f"{original!r}"
+        )
+
+    if not rest:
+        # 1x / 2x / 3x — hidden, wire unknown
+        return Slot(
+            wire=None, state=SlotState.HIDDEN,
+            multiplicity=multiplicity, required_color=required_color,
+        )
+
+    if rest[0] == "?":
+        # 2x?7 or 2x?Y4 — hidden with god-mode value
+        value_str = rest[1:]
+        if not value_str:
+            # 2x? — same as 2x (hidden unknown)
+            return Slot(
+                wire=None, state=SlotState.HIDDEN,
+                multiplicity=multiplicity,
+                required_color=required_color,
+            )
+        wire = _parse_wire_value(value_str)
+        if wire.color == WireColor.RED:
+            raise ValueError(
+                f"Multiplicity tokens cannot be used with red wires: "
+                f"{original!r}"
+            )
+        return Slot(
+            wire=wire, state=SlotState.HIDDEN,
+            multiplicity=multiplicity,
+            required_color=required_color,
+        )
+
+    # 2x7 or 2xY4 — cut with known value
+    wire = _parse_wire_value(rest)
+    if wire.color == WireColor.RED:
+        raise ValueError(
+            f"Multiplicity tokens cannot be used with red wires: "
+            f"{original!r}"
+        )
+    return Slot(
+        wire=wire, state=SlotState.CUT,
+        multiplicity=multiplicity,
+        required_color=required_color,
+    )
+
+
+def _parse_unsorted_token(
+    rest: str,
+    required_color: WireColor | None,
+    original: str,
+) -> Slot:
+    """Parse an unsorted (X) indicator token (``X`` already identified).
+
+    Formats:
+        ``X``       — HIDDEN, unsorted, wire unknown
+        ``X5``      — CUT, unsorted, wire known
+        ``X?5``     — HIDDEN, unsorted, god-mode wire known
+        ``XY4``     — CUT, unsorted, yellow wire
+        ``X?Y4``    — HIDDEN, unsorted, yellow god-mode
+
+    Args:
+        rest: The string after ``X``.
+        required_color: Color prefix, if any.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Slot with is_unsorted=True.
+
+    Raises:
+        ValueError: If the format is invalid.
+    """
+    if not rest:
+        return Slot(
+            wire=None, state=SlotState.HIDDEN,
+            is_unsorted=True, required_color=required_color,
+        )
+
+    if rest[0] == "?":
+        value_str = rest[1:]
+        if not value_str:
+            # X? — same as X
+            return Slot(
+                wire=None, state=SlotState.HIDDEN,
+                is_unsorted=True, required_color=required_color,
+            )
+        wire = _parse_wire_value(value_str)
+        return Slot(
+            wire=wire, state=SlotState.HIDDEN,
+            is_unsorted=True, required_color=required_color,
+        )
+
+    # X5 or XY4 — cut unsorted
+    wire = _parse_wire_value(rest)
+    return Slot(
+        wire=wire, state=SlotState.CUT,
+        is_unsorted=True, required_color=required_color,
+    )
+
+
+def _parse_false_info_token(
+    rest: str,
+    required_color: WireColor | None,
+    original: str,
+) -> Slot:
+    """Parse a false info token (``!`` already stripped).
+
+    False info tokens indicate "this wire is NOT value N". Only
+    applies to blue wire values (1-12).
+
+    Formats:
+        ``!3``      — HIDDEN, excluded_value=3, wire unknown
+        ``!3?5``    — HIDDEN, excluded_value=3, god-mode wire=Blue(5)
+
+    Args:
+        rest: The string after ``!``.
+        required_color: Color prefix, if any.
+        original: The original full token string (for error messages).
+
+    Returns:
+        A Slot with excluded_value set.
+
+    Raises:
+        ValueError: If the format is invalid.
+    """
+    if not rest:
+        raise ValueError(
+            f"False info token missing excluded value: {original!r}"
+        )
+
+    # Find where the excluded value ends (digits) and optional ?value
+    # starts. Format: !N or !N?V
+    i = 0
+    while i < len(rest) and rest[i].isdigit():
+        i += 1
+    if i == 0:
+        raise ValueError(
+            f"False info token missing excluded value: {original!r}"
+        )
+
+    excluded_value = int(rest[:i])
+    remaining = rest[i:]
+
+    if not remaining:
+        # !3 — hidden, excluded value only
+        return Slot(
+            wire=None, state=SlotState.HIDDEN,
+            excluded_value=excluded_value,
+            required_color=required_color,
+        )
+
+    if remaining[0] == "?":
+        value_str = remaining[1:]
+        if not value_str:
+            # !3? — same as !3
+            return Slot(
+                wire=None, state=SlotState.HIDDEN,
+                excluded_value=excluded_value,
+                required_color=required_color,
+            )
+        wire = _parse_wire_value(value_str)
+        return Slot(
+            wire=wire, state=SlotState.HIDDEN,
+            excluded_value=excluded_value,
+            required_color=required_color,
+        )
+
+    raise ValueError(f"Invalid false info token: {original!r}")
+
+
 def _parse_slot_token(token: str) -> Slot:
     """Parse a single shorthand token into a Slot object.
 
-    Token formats:
-        N       — CUT blue wire (e.g., "5", "12")
-        YN      — CUT yellow wire (e.g., "Y4")
-        RN      — CUT red wire (e.g., "R5")
+    Supports all token formats including indicator tokens. The parser
+    uses a prefix-stripping pipeline:
+
+    1. Strip optional color prefix (``b``/``y``/``r``)
+    2. Determine indicator type and parse accordingly
+    3. Return Slot with all fields set
+
+    **Standard tokens** (backward compatible):
+
+        N       — CUT blue wire (e.g., ``5``, ``12``)
+        YN      — CUT yellow wire (e.g., ``Y4``)
+        RN      — CUT red wire (e.g., ``R5``)
         ?       — HIDDEN unknown wire
-        ?N      — HIDDEN blue wire (e.g., "?4")
-        ?YN     — HIDDEN yellow wire (e.g., "?Y4")
-        ?RN     — HIDDEN red wire (e.g., "?R5")
-        iN      — INFO_REVEALED blue info token (e.g., "i5")
-        iY      — INFO_REVEALED yellow info token (e.g., "iY")
-        iYN     — INFO_REVEALED yellow info token, observer knows
-                  exact wire (e.g., "iY4")
+        ?N      — HIDDEN blue wire (e.g., ``?4``)
+        ?YN     — HIDDEN yellow wire (e.g., ``?Y4``)
+        ?RN     — HIDDEN red wire (e.g., ``?R5``)
+        iN      — INFO_REVEALED blue info token (e.g., ``i5``)
+        iY      — INFO_REVEALED yellow info token
+        iYN     — INFO_REVEALED yellow, observer knows wire
 
-    Red info tokens (``iR``, ``iRN``) are invalid — there is no such
-    thing as a red info token in Bomb Busters.
+    **Indicator tokens** (new):
 
-    Prefixes are case-insensitive.
+        !N      — HIDDEN, false info ("not value N")
+        !N?V    — HIDDEN, false info, god-mode wire known
+        E / O   — HIDDEN, even/odd parity
+        E?N     — HIDDEN, even/odd, god-mode wire known
+        NxV     — CUT, multiplicity (1x, 2x, 3x)
+        Nx?V    — HIDDEN, multiplicity, god-mode wire known
+        Nx      — HIDDEN, multiplicity, wire unknown
+        X       — HIDDEN, unsorted (X token)
+        X?N     — HIDDEN, unsorted, god-mode wire known
+        XN      — CUT, unsorted
+
+    **Color prefixes** (optional, combinable with indicators):
+
+        b       — Must be blue (e.g., ``b?``, ``bE?4``, ``bX?5``)
+        y       — Must be yellow (only with ``?``, ``X``, multiplicity)
+        r       — Must be red (only with ``?``, ``X``)
+
+    ``b`` is always a color prefix. ``y``/``r`` are color prefixes
+    only when followed by an indicator prefix char; otherwise
+    ``Y4`` = cut yellow wire, ``R5`` = cut red wire.
+
+    All prefixes are case-insensitive.
 
     Args:
         token: The shorthand string for a single slot.
 
     Returns:
-        A Slot object with the appropriate state and wire/info_token.
+        A Slot object with the appropriate state and metadata.
 
     Raises:
         ValueError: If the token cannot be parsed.
@@ -614,59 +1086,92 @@ def _parse_slot_token(token: str) -> Slot:
     if not token:
         raise ValueError("Empty slot token")
 
-    # INFO_REVEALED: starts with 'i' or 'I'
-    if token[0] in ("i", "I"):
-        rest = token[1:]
-        if not rest:
-            raise ValueError(f"Info token missing value: {token!r}")
-        upper_rest = rest.upper()
-        # Red info tokens do not exist (cutting red = game over)
-        if upper_rest.startswith("R"):
-            raise ValueError(
-                f"Red info tokens do not exist: {token!r}. "
-                f"Use '?R{rest[1:]}' for a hidden red wire known "
-                f"to the observer."
-            )
-        if upper_rest == "Y":
-            # iY — yellow info token, exact wire unknown to observer
-            return Slot(wire=None, state=SlotState.INFO_REVEALED,
-                        info_token="YELLOW")
-        if upper_rest.startswith("Y"):
-            # iYN — yellow info token, observer knows exact wire
-            num_str = rest[1:]
-            try:
-                n = int(num_str)
-            except ValueError:
-                raise ValueError(
-                    f"Invalid yellow info token number: {token!r}"
-                )
+    original = token
+    required_color: WireColor | None = None
+
+    # ── Step 1: Strip optional color prefix ───────────────────
+    first_upper = token[0].upper()
+
+    if first_upper == "B":
+        # 'b' is always a color prefix
+        required_color = WireColor.BLUE
+        token = token[1:]
+        if not token:
+            # bare "b" → hidden blue unknown
             return Slot(
-                wire=Wire(WireColor.YELLOW, n + 0.1),
-                state=SlotState.INFO_REVEALED,
-                info_token="YELLOW",
+                wire=None, state=SlotState.HIDDEN,
+                required_color=required_color,
             )
-        # iN — blue info token (a numeric info token is always blue)
-        try:
-            value = int(rest)
-        except ValueError:
-            raise ValueError(f"Invalid info token value: {token!r}")
+    elif first_upper in ("Y", "R"):
+        # y/r are color prefixes only when followed by an indicator
+        # prefix char. Otherwise Y4 = cut yellow, R5 = cut red.
+        rest_after = token[1:]
+        if _has_indicator_prefix(rest_after):
+            required_color = (
+                WireColor.YELLOW if first_upper == "Y"
+                else WireColor.RED
+            )
+            token = rest_after
+            if not token:
+                # bare "y" or "r" → hidden with color constraint
+                return Slot(
+                    wire=None, state=SlotState.HIDDEN,
+                    required_color=required_color,
+                )
+
+    # ── Step 2: Determine indicator type ──────────────────────
+    if not token:
         return Slot(
-            wire=Wire(WireColor.BLUE, float(value)),
-            state=SlotState.INFO_REVEALED,
-            info_token=value,
+            wire=None, state=SlotState.HIDDEN,
+            required_color=required_color,
         )
 
+    first = token[0]
+    first_up = first.upper()
+    rest = token[1:]
+
+    # INFO_REVEALED: starts with 'i' or 'I'
+    if first in ("i", "I"):
+        slot = _parse_info_token(rest, original)
+        slot.required_color = required_color
+        return slot
+
+    # Even/Odd parity: E or O
+    if first_up == "E":
+        return _parse_parity_token(
+            rest, Parity.EVEN, required_color, original,
+        )
+    if first_up == "O":
+        return _parse_parity_token(
+            rest, Parity.ODD, required_color, original,
+        )
+
+    # Multiplicity: digit + 'x' (1x, 2x, 3x)
+    if first.isdigit() and rest and rest[0].lower() == "x":
+        return _parse_multiplicity_token(
+            first, rest[1:], required_color, original,
+        )
+
+    # Unsorted: X
+    if first_up == "X":
+        return _parse_unsorted_token(rest, required_color, original)
+
+    # False info: !
+    if first == "!":
+        return _parse_false_info_token(rest, required_color, original)
+
     # HIDDEN: starts with '?'
-    if token[0] == "?":
-        rest = token[1:]
-        if not rest:
-            return Slot(wire=None, state=SlotState.HIDDEN)
-        wire = _parse_wire_value(rest)
-        return Slot(wire=wire, state=SlotState.HIDDEN)
+    if first == "?":
+        wire = _parse_hidden_value(rest, original)
+        return Slot(
+            wire=wire, state=SlotState.HIDDEN,
+            required_color=required_color,
+        )
 
     # CUT: plain wire value
     wire = _parse_wire_value(token)
-    return Slot(wire=wire, state=SlotState.CUT)
+    return Slot(wire=wire, state=SlotState.CUT,
+                required_color=required_color)
 
 
 # =============================================================================
@@ -845,21 +1350,29 @@ class TileStand:
         self.slots[index].state = SlotState.INFO_REVEALED
         self.slots[index].info_token = value
 
-    def stand_lines(self, mask_hidden: bool = False) -> tuple[str, str, str]:
+    def stand_lines(
+        self,
+        mask_hidden: bool = False,
+        cell_width: int | None = None,
+    ) -> tuple[str, str, str]:
         """Return the three display lines for this stand: status, values, letters.
 
         The status line uses symbols above each value to indicate state:
         nothing for hidden, checkmark for cut, 'i' for info-revealed.
-        Each cell is 3 characters wide for consistent alignment.
+        For hidden slots with indicator tokens (parity, multiplicity,
+        unsorted, false info), the indicator label is shown instead.
 
         Args:
             mask_hidden: If True, hidden wires are shown as '?' even if
                 the wire identity is known (observer perspective mode).
+            cell_width: If provided, overrides the auto-detected cell
+                width. Used to ensure consistent column alignment when
+                multiple players' stands are printed together.
 
         Returns:
             A tuple of (status_line, values_line, letters_line).
         """
-        CELL = 3
+        CELL = cell_width if cell_width is not None else 3
         status_parts: list[str] = []
         value_parts: list[str] = []
         letter_parts: list[str] = []
@@ -876,6 +1389,14 @@ class TileStand:
             elif slot.state == SlotState.INFO_REVEALED:
                 indicator = f"{_Colors.BOLD}i{_Colors.RESET}"
                 indicator_plain_width = 1
+            elif slot.state == SlotState.HIDDEN:
+                ind = slot.indicator_label()
+                if ind is not None:
+                    ind_plain, indicator = ind
+                    indicator_plain_width = len(ind_plain)
+                else:
+                    indicator = " "
+                    indicator_plain_width = 1
             else:
                 indicator = " "
                 indicator_plain_width = 1
@@ -887,6 +1408,25 @@ class TileStand:
         values_line = "".join(value_parts)
         letters_line = "".join(letter_parts)
         return status_line, values_line, letters_line
+
+    def min_cell_width(self) -> int:
+        """Compute the minimum cell width needed for this stand.
+
+        Considers both value labels and indicator labels to ensure
+        all content fits without truncation.
+
+        Returns:
+            Minimum cell width (at least 3).
+        """
+        width = 3
+        for slot in self.slots:
+            plain, _ = slot.value_label()
+            width = max(width, len(plain) + 1)
+            ind = slot.indicator_label()
+            if ind is not None:
+                ind_plain, _ = ind
+                width = max(width, len(ind_plain) + 1)
+        return width
 
     def __str__(self) -> str:
         _, values_line, letters_line = self.stand_lines()
@@ -954,7 +1494,11 @@ def get_sort_value_bounds(
     # Scan left for nearest publicly visible wire (CUT or INFO_REVEALED).
     # HIDDEN slots are skipped even if they contain a wire (simulation mode),
     # because the observer cannot see hidden wires on other players' stands.
+    # Unsorted (X token) slots are also skipped — they are not sorted with
+    # the rest of the stand and should not constrain neighbors.
     for i in range(slot_index - 1, -1, -1):
+        if slots[i].is_unsorted:
+            continue
         sv = _slot_sort_value(slots[i])
         if sv is not None:
             lower = sv
@@ -962,6 +1506,8 @@ def get_sort_value_bounds(
 
     # Scan right for nearest publicly visible wire
     for i in range(slot_index + 1, len(slots)):
+        if slots[i].is_unsorted:
+            continue
         sv = _slot_sort_value(slots[i])
         if sv is not None:
             upper = sv
@@ -1815,6 +2361,35 @@ class GameState:
                         f"({total_wires} total wires, captain={captain})"
                     )
 
+        # Auto-generate constraints from slot indicator metadata.
+        auto_constraints: list[SlotConstraint] = []
+        for p_idx, stand in enumerate(stands):
+            for s_idx, slot in enumerate(stand.slots):
+                if slot.parity is not None:
+                    auto_constraints.append(SlotParity(
+                        player_index=p_idx,
+                        slot_index=s_idx,
+                        parity=slot.parity,
+                    ))
+                if slot.multiplicity is not None:
+                    auto_constraints.append(ValueMultiplicity(
+                        player_index=p_idx,
+                        slot_index=s_idx,
+                        multiplicity=slot.multiplicity,
+                    ))
+                if slot.is_unsorted:
+                    auto_constraints.append(UnsortedSlot(
+                        player_index=p_idx,
+                        slot_index=s_idx,
+                    ))
+                if slot.excluded_value is not None:
+                    auto_constraints.append(SlotExcludedValue(
+                        player_index=p_idx,
+                        slot_index=s_idx,
+                        excluded_value=slot.excluded_value,
+                    ))
+        all_constraints = auto_constraints + (constraints or [])
+
         return cls(
             players=players,
             detonator=Detonator(
@@ -1829,7 +2404,7 @@ class GameState:
             current_player_index=active_player_index,
             active_player_index=active_player_index,
             captain_index=captain,
-            slot_constraints=constraints or [],
+            slot_constraints=all_constraints,
         )
 
     # -----------------------------------------------------------------
@@ -2612,6 +3187,30 @@ class GameState:
             )
         )
 
+    def add_slot_excluded_value(
+        self,
+        player_index: int,
+        slot_index: int,
+        value: int,
+    ) -> None:
+        """Add a SlotExcludedValue constraint (false info token).
+
+        Indicates that the wire at this slot is NOT the specified
+        blue wire value.
+
+        Args:
+            player_index: The player whose stand is constrained.
+            slot_index: The slot index.
+            value: The blue wire value (1-12) that this slot is NOT.
+        """
+        self.slot_constraints.append(
+            SlotExcludedValue(
+                player_index=player_index,
+                slot_index=slot_index,
+                excluded_value=value,
+            )
+        )
+
     def cut_all_of_value(self, value: int | str) -> None:
         """Cut all remaining uncut wires of a given value across all stands.
 
@@ -2754,6 +3353,12 @@ class GameState:
             self.active_player_index if self.active_player_index is not None
             else self.current_player_index
         )
+
+        # Pre-compute max cell width across all players for alignment
+        max_cell = 3
+        for player in self.players:
+            max_cell = max(max_cell, player.tile_stand.min_cell_width())
+
         for i, player in enumerate(self.players):
             crown = " 👑" if i == self.captain_index else ""
             if i == highlight_index:
@@ -2767,6 +3372,7 @@ class GameState:
             )
             status_line, values_line, letters_line = player.tile_stand.stand_lines(
                 mask_hidden=mask,
+                cell_width=max_cell if max_cell > 3 else None,
             )
             prefix = indent + "  "
             lines.append(f"{prefix}{status_line}")

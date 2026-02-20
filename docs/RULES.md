@@ -53,7 +53,74 @@ Bomb Busters is a co-op game best played with 4-5 players. Each player is given 
     - [Constraint cards](#constraint-cards)
     - [Challenge cards](#challenge-cards)
   - [End of the Game](#end-of-the-game)
-  - [Gameplay Tips](#gameplay-tips)
+  - [Strategy Tips](#strategy-tips)
+  - [Missions](#missions)
+    - [1. TRAINING, Day 1](#1-training-day-1)
+    - [2. TRAINING, Day 2](#2-training-day-2)
+    - [3. TRAINING, Day 3](#3-training-day-3)
+    - [4. TRAINING: First Day in the Field](#4-training-first-day-in-the-field)
+    - [5. TRAINING: Second Day in the Field](#5-training-second-day-in-the-field)
+    - [6. TRAINING: THIRD Day in the Field](#6-training-third-day-in-the-field)
+    - [7. TRAINING: Last Day of Class](#7-training-last-day-of-class)
+    - [8. FINAL EXAM](#8-final-exam)
+    - [9. A Sense of Priorities](#9-a-sense-of-priorities)
+    - [10. A Rough Patch](#10-a-rough-patch)
+    - [11. Blue on Red, Looks Like We Are Dead](#11-blue-on-red-looks-like-we-are-dead)
+    - [12. Wrapped in Red Tape](#12-wrapped-in-red-tape)
+    - [13. Red Alert!](#13-red-alert)
+    - [14. High-Risk Bomb Disposal Expert (aka. NOOB)](#14-high-risk-bomb-disposal-expert-aka-noob)
+    - [15. Mission in Новосибирск](#15-mission-in-новосибирск)
+    - [16. Time to Reprioritize (Is this deja vu?)](#16-time-to-reprioritize-is-this-deja-vu)
+    - [17. Rhett Herrings](#17-rhett-herrings)
+    - [18. BAT-Helping-Hand](#18-bat-helping-hand)
+    - [19. In the Belly of the Beast](#19-in-the-belly-of-the-beast)
+    - [20. The Big Bad Wolf](#20-the-big-bad-wolf)
+    - [21. Death by Haggis](#21-death-by-haggis)
+    - [22. Negative Impressions](#22-negative-impressions)
+    - [23. Defusing in Fordwich (381 inhabitants, 64 miles from London)](#23-defusing-in-fordwich-381-inhabitants-64-miles-from-london)
+    - [24. Tally Ho!](#24-tally-ho)
+    - [25. The Better to Hear You with...](#25-the-better-to-hear-you-with)
+    - [26. Speaking of the Wolf...](#26-speaking-of-the-wolf)
+    - [27. Playing with Wire](#27-playing-with-wire)
+    - [28. Captain Careless](#28-captain-careless)
+    - [29. Guessing Game](#29-guessing-game)
+    - [30. Speed Mission!](#30-speed-mission)
+    - [31.](#31)
+    - [32.](#32)
+    - [33.](#33)
+    - [34.](#34)
+    - [35.](#35)
+    - [36.](#36)
+    - [37.](#37)
+    - [38.](#38)
+    - [39.](#39)
+    - [40.](#40)
+    - [41.](#41)
+    - [42.](#42)
+    - [43.](#43)
+    - [44.](#44)
+    - [45.](#45)
+    - [46.](#46)
+    - [47.](#47)
+    - [48.](#48)
+    - [49.](#49)
+    - [50.](#50)
+    - [51.](#51)
+    - [52.](#52)
+    - [53.](#53)
+    - [54.](#54)
+    - [55.](#55)
+    - [56.](#56)
+    - [57.](#57)
+    - [58.](#58)
+    - [59.](#59)
+    - [60.](#60)
+    - [61.](#61)
+    - [62.](#62)
+    - [63.](#63)
+    - [64.](#64)
+    - [65.](#65)
+    - [66.](#66)
 
 ## Game Components
 
@@ -392,7 +459,314 @@ The mission ends in success when all bomb disposal experts have empty tile stand
 
 If the mission ends in failure (red wire cut or detonator dial reaches the skull), change which player is the captain and restart the mission.
 
-## Gameplay Tips
+## Strategy Tips
 
 - If a player attempts and fails a dual cut, we know they have at least one wire of the guessed value. The probability engine uses this deduction automatically via the "must-have" constraint system.
 - You can narrow down possibilities on someone's tile stand by referencing which values are fully validated (all 4 cut). Those numbers cannot exist on anyone's stand.
+
+## Missions
+
+This section describes the setup and rules for the different missions in the game. The information here is primarily used to construct the dataclasses of different missions for faster game setup. This should not be considered a complete exhaustive list of all mission cards, rules, and flavor text. Partly because it isn't necessarily to include, but also because I want to respect the game's IP and not include content from the game that isn't relevant to this calculator. 
+
+All missions are numbered and missions are played in order with increasing complexity. There are 66 total missions in the game. Each mission has a mission number, title, flavor text, setup, modifications for 2 or 3 players, and sometimes mission specific instructions. Since this calculator only supports 4-5 player arrangements, the rule exceptions for 2-3 players are ignored.
+
+
+### 1. TRAINING, Day 1
+
+Setup:
+- Blue wires 1-6 only
+- No equipment
+
+### 2. TRAINING, Day 2
+
+Setup: 
+- Blue wires 1-8 only
+- 2 yellow wires
+- No equipment cards
+
+
+### 3. TRAINING, Day 3
+
+Setup: 
+- Blue wires 1-10 only
+- 1 red wire
+- Equipment 1-10 included
+
+
+
+### 4. TRAINING: First Day in the Field
+
+Setup: 
+- All blue wires (assumed default for all missions after this)
+- 1 red wire
+- 2 yellow wires 
+- Equipment 1-12 included (assumed default for all missions after this)
+
+### 5. TRAINING: Second Day in the Field
+
+Setup:
+- 1 red wire
+- 2 of 3 yellow wires
+
+### 6. TRAINING: THIRD Day in the Field
+
+Setup: 
+- 1 red wire
+- 4 yellow wires
+
+### 7. TRAINING: Last Day of Class
+
+Setup: 
+- 1 of 2 red wires
+
+### 8. FINAL EXAM
+
+Setup:
+- 1 of 2 red wires
+- 2 of 3 yellow wires
+
+### 9. A Sense of Priorities
+
+Setup:
+- 1 red wire
+- 2 yellow wires
+- 3 Number cards
+- 1 Sequence card
+- Yellow equipment card gets added to the pool of possible equipment for this mission and all missions after this. If it is drawn but there are no yellow wires in the setup, replace it with a different equipment card. 
+
+Shuffle the Number cards, draw 3 of them, and set them faceup in a line on the table. Place the Sequence card (side A) above the leftmost card.
+
+### 10. A Rough Patch
+
+Setup:
+- 1 red wire
+- 4 yellow wires
+- 15 minute timer
+- Equipment 11 is not allowed
+
+### 11. Blue on Red, Looks Like We Are Dead
+
+Setup: 
+- 2 yellow wires
+- 1 Number card
+
+### 12. Wrapped in Red Tape
+
+Setup:
+- 1 red wire
+- 4 yellow wires
+- One Number card for each equipment card in play
+
+### 13. Red Alert!
+
+Setup: 
+- 3 red wires
+  - Instead of shuffling the red wires into the pool, they are randomly dealt to players one at a time starting with the captain and continuing clockwise. As a result, we know exactly who has red wires and how many they have. 
+- During the Info token setup phase, each player takes an info token from the pool randomly and places it on their stand. If they have that value, they can place it in front of any matching wire. If they do not have that value, it is placed to the side of their stand showing a player-does-not-have constraint. 
+
+### 14. High-Risk Bomb Disposal Expert (aka. NOOB)
+
+Setup:
+- 2 red wires
+- 2 of 3 red wires
+
+### 15. Mission in Новосибирск
+
+Setup: 
+- 1 of 3 red wires
+- 12 Number cards
+
+### 16. Time to Reprioritize (Is this deja vu?)
+
+Setup: 
+- 1 red wire
+- 2 of 3 yellow wires
+- 3 Number cards
+- 1 Sequence card
+
+Shuffle the Number cards, draw 3 of them, and put them faceup in a line on the table. Put the Sequence card (side B) above the leftmost card. 
+
+### 17. Rhett Herrings
+
+Setup:
+- 2 of 3 red wires
+
+Info tokens are placed normally for all players except for the captain. The captain is designated as the "Rhett Herring". For the captain only, they choose and place 2 info tokens that must be fake. They can not be placed in front of a red wire. These tokens indicate a must-not-be-value constraint. Everyone else places info tokens as normal. 
+
+### 18. BAT-Helping-Hand
+
+Setup: 
+- 2 red wires
+- 12 Number cards
+- Put equipment 8. General Radar faceup on the board, no other equipment is allowed. 
+
+Do not place info tokens in front of tile stands during setup. 
+
+### 19. In the Belly of the Beast
+
+Setup:
+- 1 red wire
+- 2 of 3 yellow wires
+
+### 20. The Big Bad Wolf
+
+Setup: 
+- 2 red wires
+- 2 yellow wires
+- 1 X token per player
+- Equipment 2. Walkie-talkie is not allowed 
+
+The last wire dealt to each tile stand is not sorted in ascending order, but is put on the far right end of the stand (regardless of its value). Put a X token in front to indicate this wire. (The X wire can be any color).
+
+
+
+### 21. Death by Haggis
+
+Setup:
+- 1 of 2 red wires
+- Even / Odd indicator tokens (always replaces the use of normal info tokens including the yellow info token)
+
+During Setup, instead of putting an Info token in front of the tile stand, put 1 even.odd token. The information you're sharing is no longer the wire number, but whether the wire is odd or even. 
+
+### 22. Negative Impressions
+
+Setup:
+- 1 red wire
+- 4 yellow wires
+
+Instead of choosing an Info token as usual, each player takes 2 tokens of values they do NOT have in their hand and puts them next to their tile stand. 
+- Taking a yellow token is allowed. 
+- If a bomb disposal expert has fewer than 2 values missing from their hand, they place fewer tokens (either 1 or 0). 
+
+### 23. Defusing in Fordwich (381 inhabitants, 64 miles from London)
+
+Setup:
+- 1 of 3 red wires
+- 1 Number card
+
+Do not take any Equipment cards during Setup, but instead create a deck of 7 random Equipment cards and place it facedown on the board. 
+
+Select a Number card at random and place it faceup next to the mission card. 
+
+
+### 24. Tally Ho!
+
+Setup:
+- 2 red wires
+- x1 x2 x3 Info tokens (always replaces the normal use of info tokens including the yellow info token)
+
+The x1 x2 x3 indicator tokens can not be placed in front of RED wires. 
+
+### 25. The Better to Hear You with...
+
+Setup: 
+- 2 red wires
+
+### 26. Speaking of the Wolf...
+
+Setup:
+- 2 red wires
+- All 12 Number cards
+- Equipment 10. X or Y ray is not allowed
+
+### 27. Playing with Wire
+
+Setup: 
+- 1 red wire
+- 4 yellow wires
+- Double detectors disabled this mission
+- Equipment 7 Emergency Batteries is not allowed
+
+### 28. Captain Careless
+
+Setup: 
+- 2 red wires
+- 4 yellow wires
+- The captain of the mission's double detector is disabled this mission
+
+### 29. Guessing Game
+
+Setup:
+- 3 red wires
+- Number cards
+
+Shuffle and deal 2 Number cards facedown to each player (3 cards to the player on the Captain's right), then put the rest facedown in a deck on the table. Each player picks up their cards discreetly. 
+
+### 30. Speed Mission!
+
+Setup:
+- 1 of 2 red wires
+- 4 yellow wires
+- 12 Number cards
+
+### 31. 
+
+### 32. 
+
+### 33. 
+
+### 34. 
+
+### 35. 
+
+### 36. 
+
+### 37. 
+
+### 38. 
+
+### 39. 
+
+### 40. 
+
+### 41. 
+
+### 42. 
+
+### 43. 
+
+### 44. 
+
+### 45. 
+
+### 46. 
+
+### 47. 
+
+### 48. 
+
+### 49. 
+
+### 50. 
+
+### 51. 
+
+### 52. 
+
+### 53. 
+
+### 54. 
+
+### 55. 
+
+### 56. 
+
+### 57. 
+
+### 58. 
+
+### 59. 
+
+### 60. 
+
+### 61. 
+
+### 62. 
+
+### 63. 
+
+### 64. 
+
+### 65. 
+
+### 66. 
